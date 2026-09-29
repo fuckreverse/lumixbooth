@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import BoothCore
 import BoothUI
 
@@ -102,6 +103,20 @@ struct OpSettingsTab: View {
                     label("默认打印份数")
                     Stepper("\(vm.config.printing.defaultCopies) 份",
                             value: bind(\.printing.defaultCopies), in: 1...4)
+                }
+                Toggle("演示模式（不送打印机，输出 PDF 到预览目录）",
+                       isOn: bind(\.printing.dryRun))
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+                HStack {
+                    label("预览目录")
+                    Button("打开 print-preview 目录") {
+                        NSWorkspace.shared.open(BoothPaths.printPreviewDir)
+                    }
+                    .font(theme.bodyFont(15))
+                    Text("dry-run 打印的 PDF 落在这里")
+                        .font(theme.bodyFont(14))
+                        .foregroundStyle(theme.textSecondaryColor)
                 }
             }
         }

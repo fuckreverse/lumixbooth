@@ -66,7 +66,23 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var paperHeightMM = 152.4
         public var borderless = true
         public var dedupeWindowSec = 5            // 同一成片防连点窗口
+        public var dryRun = false                 // 演示模式：不送打印机，输出 PDF 到 print-preview/
         public init() {}
+
+        /// 向后兼容解码：老 config.json 缺字段时回落默认值，而不是整份配置解码失败
+        public init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let d = PrintConf()
+            printerName = try c.decodeIfPresent(String.self, forKey: .printerName) ?? d.printerName
+            defaultCopies = try c.decodeIfPresent(Int.self, forKey: .defaultCopies) ?? d.defaultCopies
+            minCopies = try c.decodeIfPresent(Int.self, forKey: .minCopies) ?? d.minCopies
+            maxCopies = try c.decodeIfPresent(Int.self, forKey: .maxCopies) ?? d.maxCopies
+            paperWidthMM = try c.decodeIfPresent(Double.self, forKey: .paperWidthMM) ?? d.paperWidthMM
+            paperHeightMM = try c.decodeIfPresent(Double.self, forKey: .paperHeightMM) ?? d.paperHeightMM
+            borderless = try c.decodeIfPresent(Bool.self, forKey: .borderless) ?? d.borderless
+            dedupeWindowSec = try c.decodeIfPresent(Int.self, forKey: .dedupeWindowSec) ?? d.dedupeWindowSec
+            dryRun = try c.decodeIfPresent(Bool.self, forKey: .dryRun) ?? d.dryRun
+        }
     }
 
     public struct ServerConf: Codable, Sendable, Equatable {
