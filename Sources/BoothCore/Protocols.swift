@@ -48,6 +48,13 @@ public protocol PersonSegmenting: Sendable {
     func segmentationMask(for image: CGImage) async throws -> CGImage
 }
 
+/// 人脸关键点检测（搞怪装饰/贴纸/形变用）：对成片原图跑一次。
+/// 输出 FaceGeometry，坐标为原图像素、原点左下、y 向上；
+/// 未检出人脸不抛错，返回空数组（上层降级跳过需人脸的装饰）。
+public protocol FaceLandmarking: Sendable {
+    func detectFaces(in image: CGImage) async throws -> [FaceGeometry]
+}
+
 // MARK: - 修图合成（ImagingKit 实现）
 
 /// 修图合成管线（SPEC §6）：
