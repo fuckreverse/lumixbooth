@@ -1,0 +1,529 @@
+import XCTest
+import BoothCore
+@testable import SessionEngine
+
+// 状态判定（文件级自由函数，避免在 @Sendable 闭包里捕获非 Sendable 的测试类实例）
+private func isReview(_ s: BoothState) -> Bool { if case .review = s { return true }; return false }
+private func isFailure(_ s: BoothState) -> Bool { if case .failure = s { return true }; return false }
+private func isCapturing(_ s: BoothState) -> Bool { if case .capturing = s { return true }; return false }
+private func isPrinting(_ s: BoothState) -> Bool { if case .printing = s { return true }; return false }
+
+// ============================================================
+// SessionCoordinator 状态机测试：
+// 全部使用本地 Mock（MockCamera/MockGesture/MockReadiness/MockImaging/
+// MockPrinter/MockServer），不接真机、真打印。
+// 倒计时用 countdownSec=0/1 加速；failure/printing 停留时长用
+// coordinator.failureDwell/printingDwell 调短。
+// 注意：ConfigStore 只暴露 .shared（契约限制），测试间通过 setUp 重置；
+// XCTest 断言的 autoclosure 不支持 await，一律先取值再断言。
+// ============================================================
+final class SessionCoordinatorTests: XCTestCase {
+
+    // 每个 test 全新一套 Mock + 独立 EventBus
+    private var camera = MockCamera()
+    private var gesture = MockGesture()
+    private var readiness = MockReadiness()
+    private var imaging = MockImaging()
+    private var printer = MockPrinter()
+    private var server = MockServer()
+    private var bus = EventBus()
+    private var recorder = StateRecorder()
+
+    // MARK: - 搭建
+
+    override func setUp() async throws {
+        // 重置共享配置到默认值，各测试再覆写关键字段
+        await ConfigStore.shared.update { c in c = BoothConfig() }
+        camera = MockCamera()
+        gesture = MockGesture()
+        readiness = MockReadiness()
+        imaging = MockImaging()
+        printer = MockPrinter()
+        server = MockServer()
+        bus = EventBus()
+        recorder = StateRecorder()
+    }
+
+    override func tearDown() async throws {
+        // 还原默认配置，避免污染落盘的 config.json
+        await ConfigStore.shared.update { c in c = BoothConfig() }
+    }
+
+    /// 组装被测对象并挂上状态记录器
+    private func makeSUT() -> SessionCoordinator {
+        let coord = SessionCoordinator(
+            camera: camera, gesture: gesture, readiness: readiness,
+            imaging: imaging, printer: printer, server: server,
+            config: .shared, bus: bus)
+        recorder.attach(to: bus)
+        return coord
+    }
+
+    /// 写入测试配置
+    private func configure(_ mutate: @Sendable (inout BoothConfig) -> Void) async {
+        await ConfigStore.shared.update(mutate)
+    }
+
+    /// 轮询等待条件成立（默认 10s）
+    private func waitUntil(timeout: TimeInterval = 10,
+                           _ check: @escaping @Sendable () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if await check() { return true }
+            try? await Task.sleep(nanoseconds: 15_000_000)
+        }
+        return await check()
+    }
+
+    /// 等待 + 断言（绕过 XCTest autoclosure 不支持 await 的限制）
+    @discardableResult
+    private func expect(_ message: String, timeout: TimeInterval = 10,
+                        file: StaticString = #filePath, line: UInt = #line,
+                        _ check: @escaping @Sendable () async -> Bool) async -> Bool {
+        let ok = await waitUntil(timeout: timeout, check)
+        XCTAssertTrue(ok, message, file: file, line: line)
+        return ok
+    }
+
+    /// 断言 states 按顺序包含 expected 子序列
+    private func assertInOrder(_ states: [BoothState], _ expected: [BoothState],
+                               file: StaticString = #filePath, line: UInt = #line) {
+        var i = 0
+        for s in states where i < expected.count && s == expected[i] { i += 1 }
+        XCTAssertEqual(i, expected.count, "状态序列未按顺序包含期望子序列。\n实际: \(states)\n期望: \(expected)",
+                       file: file, line: line)
+    }
+
+    /// 手动 start() 快速推进到 REVIEW（跳过手势路径）
+    @discardableResult
+    private func driveToReview(_ coord: SessionCoordinator, timeout: TimeInterval = 10) async -> Bool {
+        await coord.begin()
+        await coord.start()
+        return await waitUntil(timeout: timeout) { isReview(await coord.state) }
+    }
+
+    /// 等事件总线/记录器追平当前状态（避免断言时事件还在路上）
+    private func settle() async {
+        try? await Task.sleep(nanoseconds: 250_000_000)
+    }
+
+    // MARK: - 快乐路径
+
+    /// 全链路：idle→armed→gestureWait→countdown→capturing×4→processing→review→printing→idle
+    func testHappyPathCollageGestureDriven() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .collage(4)
+            c.capture.reviewTimeoutSec = 60
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyFrames = 2
+            c.vision.gestureHitFrames = 2
+        }
+        let coord = makeSUT()
+        await coord.begin()
+
+        // idle → armed → gestureWait（人站定）
+        readiness.readiness = MockReadiness.ready()
+        for _ in 0..<6 { camera.pushFrame() }
+        await expect("应进入 gestureWait") { await coord.state == .gestureWait }
+
+        // gestureWait → 手势命中 → 拍摄流程
+        gesture.gesture = .peace
+        for _ in 0..<4 { camera.pushFrame() }
+        await expect("应走完流程进入 review") { isReview(await coord.state) }
+
+        // review → 确认打印
+        await coord.confirmPrint(copies: 2)
+        await expect("打印后应回 idle") { await coord.state == .idle }
+
+        // 逐状态断言（顺序子序列）
+        await settle()
+        assertInOrder(recorder.states, [
+            .armed,
+            .gestureWait,
+            .countdown(secondsLeft: 1),
+            .capturing(shot: 1, of: 4),
+            .countdown(secondsLeft: 1),
+            .capturing(shot: 2, of: 4),
+            .countdown(secondsLeft: 1),
+            .capturing(shot: 3, of: 4),
+            .countdown(secondsLeft: 1),
+            .capturing(shot: 4, of: 4),
+            .processing,
+            .printing(copies: 2),
+            .idle,
+        ])
+        // review 出现在 processing 之后、printing 之前
+        let states = recorder.states
+        let reviewIdx = states.firstIndex(where: isReview)
+        let processingIdx = states.firstIndex(of: .processing)
+        let printingIdx = states.firstIndex(of: .printing(copies: 2))
+        XCTAssertNotNil(reviewIdx)
+        XCTAssertNotNil(processingIdx)
+        XCTAssertNotNil(printingIdx)
+        XCTAssertLessThan(processingIdx!, reviewIdx!)
+        XCTAssertLessThan(reviewIdx!, printingIdx!)
+
+        // 协作方调用断言
+        XCTAssertEqual(imaging.calls.count, 1)
+        XCTAssertEqual(imaging.calls.first?.originals, 4)
+        XCTAssertEqual(imaging.calls.first?.mode, .collage(4))
+        XCTAssertEqual(printer.submitted.count, 1)
+        XCTAssertEqual(printer.submitted.first?.copies, 2)
+        XCTAssertEqual(camera.captureCount, 4)
+        // server 同步：状态广播 + 成片注册 + LiveView 推流（默认开启）
+        XCTAssertFalse(server.broadcastStates.isEmpty)
+        XCTAssertEqual(server.publishedPhotos.count, 1)
+        XCTAssertGreaterThan(server.pushedFrameCount, 0)
+    }
+
+    /// 单张模式 shots=1，手动触发（空格键路径）
+    func testSingleModeManualStart() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+
+        await expect("应进入 review") { isReview(await coord.state) }
+        await coord.confirmPrint(copies: 1)
+        await expect("打印后应回 idle") { await coord.state == .idle }
+        await settle()
+
+        assertInOrder(recorder.states, [
+            .capturing(shot: 1, of: 1),
+            .processing,
+            .printing(copies: 1),
+            .idle,
+        ])
+        XCTAssertEqual(imaging.calls.count, 1)
+        XCTAssertEqual(imaging.calls.first?.originals, 1)
+        XCTAssertEqual(imaging.calls.first?.mode, .single)
+        XCTAssertEqual(camera.captureCount, 1)
+    }
+
+    // MARK: - REVIEW 超时
+
+    /// REVIEW 超时 + autoPrintOnTimeout=true → 按默认份数自动打印
+    func testReviewTimeoutAutoPrint() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 1
+            c.capture.autoPrintOnTimeout = true
+            c.printing.defaultCopies = 2
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应进入 review") { isReview(await coord.state) }
+
+        await expect("超时后应自动打印并回 idle", timeout: 5) { await coord.state == .idle }
+        await settle()
+        XCTAssertTrue(recorder.states.contains(.printing(copies: 2)), "应按默认份数自动打印")
+        XCTAssertEqual(printer.submitted.count, 1)
+        XCTAssertEqual(printer.submitted.first?.copies, 2)
+    }
+
+    /// REVIEW 超时 + autoPrintOnTimeout=false → 直接回 idle，不打印
+    func testReviewTimeoutNoAutoPrint() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 1
+            c.capture.autoPrintOnTimeout = false
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应进入 review") { isReview(await coord.state) }
+
+        await expect("超时后应直接回 idle", timeout: 5) { await coord.state == .idle }
+        await settle()
+        XCTAssertFalse(recorder.states.contains(where: isPrinting), "不应出现 printing 态")
+        XCTAssertTrue(printer.submitted.isEmpty, "不应提交打印")
+    }
+
+    // MARK: - 重拍
+
+    /// review → retake → 重新倒计时 → 再次 review → 确认打印
+    func testRetakeRestartsCountdown() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        let reached = await driveToReview(coord)
+        XCTAssertTrue(reached, "第一轮应到 review")
+
+        recorder.reset()
+        await coord.retake()
+
+        // 重新倒计时 → 重新拍摄 → 第二次 review。
+        // 注意：不能用 isReview 判断新流程（旧 review 还在时也会立即命中），
+        // 用“又拍了一张”作为新流程真正启动的信号。
+        let cam = camera
+        await expect("重拍应重新拍一张") { cam.captureCount == 2 }
+        await expect("重拍后应再次进入 review") { isReview(await coord.state) }
+        await settle()
+        assertInOrder(recorder.states, [
+            .countdown(secondsLeft: 1),
+            .capturing(shot: 1, of: 1),
+            .processing,
+        ])
+        XCTAssertEqual(imaging.calls.count, 2, "重拍应再次修图")
+        XCTAssertEqual(camera.captureCount, 2)
+
+        await coord.confirmPrint(copies: 1)
+        await expect("打印后应回 idle") { await coord.state == .idle }
+    }
+
+    // MARK: - 等待超时
+
+    /// gestureWait 超时回 idle
+    func testGestureTimeoutBackToIdle() async {
+        await configure { c in
+            c.capture.gestureTimeoutSec = 1
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyFrames = 2
+        }
+        let coord = makeSUT()
+        await coord.begin()
+
+        readiness.readiness = MockReadiness.ready()
+        for _ in 0..<6 { camera.pushFrame() }
+        await expect("应进入 gestureWait") { await coord.state == .gestureWait }
+
+        // 不给手势 → 超时
+        await expect("gestureWait 超时应回 idle", timeout: 5) { await coord.state == .idle }
+        await settle()
+        assertInOrder(recorder.states, [.gestureWait, .idle])
+    }
+
+    /// armed 态人一直未就绪，超时回 idle
+    func testArmedTimeoutBackToIdle() async {
+        await configure { c in
+            c.capture.armedTimeoutSec = 1
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyFrames = 15 // 永远凑不满就绪帧
+        }
+        let coord = makeSUT()
+        await coord.begin()
+
+        // 人在画面但未站定
+        readiness.readiness = PoseReadiness(humanPresent: true, facePresent: true,
+                                             faceAreaRatio: 0.02, isReady: false)
+        for _ in 0..<6 { camera.pushFrame() }
+        await expect("应进入 armed") { await coord.state == .armed }
+
+        await expect("armed 超时应回 idle", timeout: 5) { await coord.state == .idle }
+        await settle()
+        assertInOrder(recorder.states, [.armed, .idle])
+    }
+
+    /// armed 态人消失（连续无人帧）→ 回 idle
+    func testPersonAbsentBackToIdle() async {
+        await configure { c in
+            c.capture.armedTimeoutSec = 30
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyFrames = 2
+        }
+        let coord = makeSUT()
+        await coord.begin()
+
+        // idle → armed
+        readiness.readiness = MockReadiness.ready()
+        for _ in 0..<2 { camera.pushFrame() }
+        await expect("应进入 armed") { await coord.state == .armed }
+
+        // 人走了（注意：readiness.isReady=false 且 humanPresent=false，先不涨就绪帧）
+        readiness.readiness = .empty
+        for _ in 0..<3 { camera.pushFrame() }
+        await expect("人消失应回 idle", timeout: 5) { await coord.state == .idle }
+        await settle()
+        assertInOrder(recorder.states, [.armed, .idle])
+    }
+
+    // MARK: - 失败路径
+
+    /// 拍照失败（重试后仍失败）→ failure 态 → idle
+    func testCaptureFailureShowsFailureThenIdle() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.camera.captureRetry = 1
+        }
+        camera.failNextCaptures = 99 // 全部失败
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.setDwell(failure: 0.5)
+
+        await coord.start()
+        await expect("拍照失败应进 failure 态") { isFailure(await coord.state) }
+        await expect("failure 展示后应回 idle") { await coord.state == .idle }
+        await settle()
+
+        assertInOrder(recorder.states, [.capturing(shot: 1, of: 1), .idle])
+        XCTAssertTrue(recorder.states.contains(where: isFailure))
+        XCTAssertEqual(camera.captureCount, 2, "含 1 次重试共尝试 2 次")
+        XCTAssertTrue(printer.submitted.isEmpty)
+    }
+
+    /// 修图失败 → failure 态 → idle
+    func testImagingFailureShowsFailureThenIdle() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+        }
+        imaging.error = BoothError.imagingFailed("管线爆炸")
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.setDwell(failure: 0.5)
+
+        await coord.start()
+        await expect("修图失败应进 failure 态") { isFailure(await coord.state) }
+        await expect("failure 展示后应回 idle") { await coord.state == .idle }
+        await settle()
+
+        assertInOrder(recorder.states, [.capturing(shot: 1, of: 1), .processing, .idle])
+        XCTAssertEqual(imaging.calls.count, 1)
+    }
+
+    /// 拍摄中相机断线 → failure 态 → idle
+    func testCameraDisconnectDuringCapture() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+        }
+        camera.captureDelay = 2 // 让 capture 挂住，制造断线窗口
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.setDwell(failure: 0.5)
+
+        await coord.start()
+        await expect("应进入 capturing") { isCapturing(await coord.state) }
+
+        camera.emit(.disconnected(reason: "USB 掉线"))
+        await expect("断线应进 failure 态") { isFailure(await coord.state) }
+        await expect("failure 展示后应回 idle") { await coord.state == .idle }
+    }
+
+    // MARK: - 取消
+
+    /// 倒计时中 cancel → 立即回 idle
+    func testCancelFromCountdown() async {
+        await configure { c in
+            c.capture.countdownSec = 5
+            c.capture.defaultMode = .single
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应进入 countdown(5)") { await coord.state == .countdown(secondsLeft: 5) }
+
+        await coord.cancel()
+        await expect("cancel 应立即回 idle", timeout: 2) { await coord.state == .idle }
+        // 取消后不应再出现后续拍摄状态
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let finalState = await coord.state
+        XCTAssertEqual(finalState, .idle)
+        XCTAssertFalse(recorder.states.contains(where: isCapturing))
+        XCTAssertEqual(camera.captureCount, 0)
+    }
+
+    // MARK: - iPad 指令
+
+    /// server.commands 的 confirmPrint 指令驱动打印
+    func testServerCommandConfirmPrint() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        _ = await driveToReview(coord)
+
+        server.send(.confirmPrint(copies: 3))
+        await expect("iPad 指令应驱动打印") { await coord.state == .printing(copies: 3) }
+        await expect("打印后应回 idle") { await coord.state == .idle }
+        XCTAssertEqual(printer.submitted.count, 1)
+        XCTAssertEqual(printer.submitted.first?.copies, 3)
+    }
+
+    /// server.commands 的 retake 指令重拍
+    func testServerCommandRetake() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        _ = await driveToReview(coord)
+
+        server.send(.retake)
+        // capturing 是瞬态，轮询可能错过；用“又拍了一张”作为重拍信号
+        let cam = camera
+        await expect("retake 指令应重新拍摄") { cam.captureCount == 2 }
+        await expect("重拍后应再次进入 review") { isReview(await coord.state) }
+        XCTAssertEqual(camera.captureCount, 2)
+    }
+
+    // MARK: - 帧分发
+
+    /// frames() 重广播给 UI；liveViewToIpad=false 时不推 iPad，改 true 后热生效
+    func testFramesRebroadcastAndIpadGate() async {
+        await configure { c in
+            c.server.liveViewToIpad = false
+            c.vision.detectEveryNFrames = 1
+        }
+        let coord = makeSUT()
+        await coord.begin()
+
+        let counter = FrameCounter()
+        let uiStream = await coord.frames()
+        let consume = Task { for await _ in uiStream { counter.increment() } }
+
+        for _ in 0..<5 { camera.pushFrame() }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(server.pushedFrameCount, 0, "liveViewToIpad=false 不应推 iPad")
+        XCTAssertGreaterThanOrEqual(counter.count, 2, "UI 帧流应收到帧（bufferingNewest(2) 允许丢帧）")
+
+        // 热更新配置 → 开始推 iPad
+        await configure { c in c.server.liveViewToIpad = true }
+        for _ in 0..<3 { camera.pushFrame() }
+        let mockServer = server
+        await expect("配置热更新后应推 iPad") { mockServer.pushedFrameCount == 3 }
+        consume.cancel()
+    }
+
+    // MARK: - 非法操作防护
+
+    /// review 态下 start()/setMode() 应记 warn 并忽略
+    func testInvalidOperationIgnoredInReview() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        let reached = await driveToReview(coord)
+        XCTAssertTrue(reached, "应进入 review")
+
+        await coord.start()                 // review 态不允许手动触发
+        await coord.setMode(.collage(4))    // review 态不允许切模式
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        let stillReview = await isReview(coord.state)
+        XCTAssertTrue(stillReview, "非法操作应被忽略，保持 review")
+        let modeNow = await coord.mode
+        XCTAssertEqual(modeNow, .single, "review 态切模式应被忽略")
+        XCTAssertEqual(camera.captureCount, 1, "不应重复拍摄")
+
+        await coord.cancel()
+        await expect("cancel 后应回 idle") { await coord.state == .idle }
+    }
+}
