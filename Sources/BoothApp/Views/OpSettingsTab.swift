@@ -25,6 +25,10 @@ struct OpSettingsTab: View {
                 printCard
                 securityCard
                 imagingCard
+                soundsCard
+                shareCard
+                powerCard
+                guestbookCard
                 serverCard
                 dangerZoneCard
             }
@@ -324,6 +328,7 @@ struct OpSettingsTab: View {
                 Toggle("边框 / 相框", isOn: bind(\.imaging.frame))
                 Toggle("日期水印", isOn: bind(\.imaging.dateWatermark))
                 Toggle("拍后自选滤镜（REVIEW 选择条）", isOn: bind(\.imaging.filterSelection))
+                Toggle("拼版生成 Boomerang GIF（扫码看动态图）", isOn: bind(\.imaging.generateGIF))
 
                 HStack {
                     label("默认滤镜")
@@ -350,6 +355,118 @@ struct OpSettingsTab: View {
                         }
                     Text("修改后回车生效")
                         .font(theme.bodyFont(14))
+                        .foregroundStyle(theme.textSecondaryColor)
+                }
+            }
+            .font(theme.bodyFont(17))
+            .foregroundStyle(theme.textColor)
+        }
+    }
+
+    // MARK: - 提示音 / 邮箱采集 / 省电 / 留言簿（新增功能卡）
+
+    @State private var reprintCodeField = ""
+
+    private var soundsCard: some View {
+        BoothCard {
+            VStack(alignment: .leading, spacing: 14) {
+                cardTitle("提示音", emoji: "🔊")
+                Toggle("启用提示音（活动现场总开关）", isOn: bind(\.sounds.enabled))
+                Toggle("倒计时哔声", isOn: bind(\.sounds.countdownBeep))
+                Toggle("快门音", isOn: bind(\.sounds.shutterSound))
+                Toggle("打印完成叮声", isOn: bind(\.sounds.printDoneSound))
+                HStack {
+                    label("音量")
+                    Slider(value: bind(\.sounds.volume), in: 0...1, step: 0.1)
+                        .frame(width: 220)
+                    Text("\(Int(vm.config.sounds.volume * 100))%")
+                        .font(theme.bodyFont(15))
+                        .foregroundStyle(theme.textSecondaryColor)
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+            .font(theme.bodyFont(17))
+            .foregroundStyle(theme.textColor)
+        }
+    }
+
+    private var shareCard: some View {
+        BoothCard {
+            VStack(alignment: .leading, spacing: 14) {
+                cardTitle("邮箱采集与重打", emoji: "✉️")
+                Toggle("REVIEW 页邮箱采集（宾客输邮箱领电子版）", isOn: bind(\.share.emailCapture))
+                Text("邮箱仅落盘 emails.json，不发送；操作员页可导出 CSV。")
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
+                HStack {
+                    label("/gallery 重打口令")
+                    SecureField("1234", text: $reprintCodeField)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                        .onSubmit {
+                            MainActor.assumeIsolated {
+                                let code = reprintCodeField.trimmingCharacters(in: .whitespaces)
+                                vm.update { $0.security.reprintCode = code }
+                                Log.ui.info("重打口令已修改")
+                            }
+                        }
+                    Text("长按相册成片输口令补打；回车生效")
+                        .font(theme.bodyFont(13))
+                        .foregroundStyle(theme.textSecondaryColor)
+                }
+            }
+            .font(theme.bodyFont(17))
+            .foregroundStyle(theme.textColor)
+        }
+        .onAppear { if reprintCodeField.isEmpty { reprintCodeField = vm.config.security.reprintCode } }
+    }
+
+    private var powerCard: some View {
+        BoothCard {
+            VStack(alignment: .leading, spacing: 14) {
+                cardTitle("省电模式", emoji: "🌙")
+                HStack {
+                    label("待机调暗")
+                    Picker("", selection: Binding<Int>(
+                        get: { vm.config.capture.idleDimAfterMin },
+                        set: { v in vm.update { $0.capture.idleDimAfterMin = v } })) {
+                        Text("关闭").tag(0)
+                        Text("5 分钟").tag(5)
+                        Text("10 分钟").tag(10)
+                        Text("20 分钟").tag(20)
+                        Text("30 分钟").tag(30)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 380)
+                }
+                Text("待机超过 N 分钟：大屏盖罩调暗、暂停背景轮播；任何操作自动回亮。")
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
+            }
+            .font(theme.bodyFont(17))
+            .foregroundStyle(theme.textColor)
+        }
+    }
+
+    private var guestbookCard: some View {
+        BoothCard {
+            VStack(alignment: .leading, spacing: 14) {
+                cardTitle("视频留言簿（婚礼）", emoji: "💌")
+                Toggle("启用留言簿", isOn: bind(\.guestbook.enabled))
+                HStack {
+                    label("单条最长")
+                    Stepper("\(vm.config.guestbook.maxDurationSec) 秒",
+                            value: bind(\.guestbook.maxDurationSec), in: 5...120, step: 5)
+                }
+                HStack {
+                    label("祝福语叠印")
+                    TextField("新婚快乐", text: Binding(
+                        get: { vm.config.guestbook.overlayText },
+                        set: { v in vm.update { $0.guestbook.overlayText = String(v.prefix(20)) } }))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                    Text("录制画面右上角叠印，限 20 字")
+                        .font(theme.bodyFont(13))
                         .foregroundStyle(theme.textSecondaryColor)
                 }
             }

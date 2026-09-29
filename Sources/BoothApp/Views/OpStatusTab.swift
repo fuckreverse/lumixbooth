@@ -2,10 +2,11 @@ import SwiftUI
 import BoothCore
 import BoothUI
 
-/// 状态页：相机连接大卡片 + 打印队列列表（failed 可重试/移除）
+/// 状态页：相机连接大卡片 + 健康面板卡片 + 打印队列列表（failed 可重试/移除）
 struct OpStatusTab: View {
     @Environment(\.boothTheme) private var theme
     @ObservedObject var vm: OpStatusViewModel
+    @ObservedObject var healthVM: OpHealthViewModel
     let serverRunning: Bool
     let iPadURL: String?
 
@@ -40,6 +41,10 @@ struct OpStatusTab: View {
                             .font(theme.bodyFont(16))
                             .foregroundStyle(theme.textSecondaryColor)
                     }
+
+                    Divider()
+
+                    healthCardSection
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -89,6 +94,56 @@ struct OpStatusTab: View {
         case .searching, .connecting: return "正在连接相机…"
         case .reconnecting: return "断线重连中，请稍候"
         case .disconnected: return "请检查 USB 与机身 Tether 模式"
+        }
+    }
+
+    // MARK: 健康面板（CUPS / 磁盘 / 采集数；远程同源 /api/health）
+
+    @ViewBuilder
+    private var healthCardSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("健康监控").font(theme.bodyFont(24, weight: .bold)).foregroundStyle(theme.textColor)
+                Spacer()
+                Button(healthVM.refreshing ? "刷新中…" : "刷新") { healthVM.refresh() }
+                    .buttonStyle(BoothBounceStyle())
+                    .font(theme.bodyFont(15, weight: .bold))
+                    .disabled(healthVM.refreshing)
+            }
+            if let s = healthVM.status {
+                healthRow("打印机", s.printer, emoji: "🖨️")
+                healthRow("磁盘余量", s.diskFreeMB >= 0 ? "\(s.diskFreeMB) MB" : "查询失败", emoji: "💽")
+                healthRow("当前状态", s.state, emoji: "🎬")
+                healthRow("邮箱采集", "\(s.emailsCollected) 条", emoji: "✉️")
+                if !s.ok {
+                    Text("⚠️ 有异常项，详情见 /api/health")
+                        .font(theme.bodyFont(13))
+                        .foregroundStyle(theme.warningColor)
+                }
+            } else {
+                Text("采样中…")
+                    .font(theme.bodyFont(16))
+                    .foregroundStyle(theme.textSecondaryColor)
+            }
+
+            Divider()
+
+            BoothSecondaryButton("导出邮箱 CSV", emoji: "📤") { healthVM.exportEmailsCSV() }
+            if let notice = healthVM.exportNotice {
+                Text(notice)
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func healthRow(_ title: String, _ value: String, emoji: String) -> some View {
+        HStack {
+            Text(emoji).font(theme.bodyFont(16))
+            Text(title).font(theme.bodyFont(16)).foregroundStyle(theme.textSecondaryColor)
+            Spacer()
+            Text(value).font(theme.bodyFont(16, weight: .bold)).foregroundStyle(theme.textColor)
         }
     }
 

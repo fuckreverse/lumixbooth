@@ -10,8 +10,11 @@ import BoothCore
 //   GET /                     iPad 单页应用（WebAssets.indexHTML）
 //   GET /live                 LiveView MJPEG 流（multipart/x-mixed-replace; boundary=booth）
 //   GET /photo/{id}           成片下载（QR 码指向），publishPhoto 注册后可取
+//   GET /photo/{id}.gif       Boomerang 动态图（拼版模式生成；QR 优先指向）
 //   GET /photo/history/{date}/{session}  历史成片（gallery/slideshow 用）
 //   GET /api/photos           最近成片列表 JSON（gallery/slideshow 拉取）
+//   GET /api/health           健康状态 JSON（远程监控：相机/打印机/磁盘）
+//   GET /api/emails           邮箱采集列表 JSON（操作员远程查看）
 //   GET /gallery              iPad 独立相册页
 //   GET /slideshow            iPad 独立放映页
 //   GET /ws                   WebSocket（Upgrade 握手）：状态下行 + iPad 指令上行
@@ -138,6 +141,10 @@ public actor BoothWebService: BoothWebServing {
     private var listener: NWListener?
     private var sessions: [ObjectIdentifier: ClientSession] = [:]
     private var photos: [UUID: URL] = [:]
+    /// Boomerang GIF 注册表（/photo/{id}.gif；无 GIF 的会话不注册，回退静态图）
+    private var gifs: [UUID: URL] = [:]
+    /// 健康监控（可注入；默认单例——不接相机，BoothApp 组装时传 live 实例）
+    private let health: HealthMonitor
     /// 最近一次广播的状态，新 WS 客户端接入立即补发（断线重连不丢屏）
     private var lastState: BoothState?
     /// MJPEG 帧率封顶用的时间戳
@@ -146,8 +153,9 @@ public actor BoothWebService: BoothWebServing {
     private var historyCache: [HistoryPhoto]?
     private var historyCacheAt: Date?
 
-    public init(conf: BoothConfig = BoothConfig()) {
+    public init(conf: BoothConfig = BoothConfig(), health: HealthMonitor = .shared) {
         self.conf = conf
+        self.health = health
     }
 
     // MARK: - BoothWebServing 协议（同步要求 → nonisolated）
@@ -266,7 +274,12 @@ public actor BoothWebService: BoothWebServing {
 
     public func publishPhoto(_ photo: ProcessedPhoto) async {
         photos[photo.id] = photo.displayFile
-        Log.server.info("注册成片供下载: \(photo.id.uuidString) → \(photo.displayFile.lastPathComponent)")
+        if let gif = photo.gifFile {
+            gifs[photo.id] = gif
+            Log.server.info("注册成片+GIF 供下载: \(photo.id.uuidString) → boomerang.gif")
+        } else {
+            Log.server.info("注册成片供下载: \(photo.id.uuidString) → \(photo.displayFile.lastPathComponent)")
+        }
     }
 
     // MARK: - 连接接入与收包
@@ -383,6 +396,39 @@ public actor BoothWebService: BoothWebServing {
         case ("GET", "/api/photos"):
             serveHistoryList(conn)
 
+        case ("GET", "/api/health"):
+            // 远程健康监控（iPad/手机浏览器直接打开）
+            Task { await serveHealth(conn) }
+
+        case ("GET", "/api/emails"):
+            // 邮箱采集列表（操作员远程查看/导出前的确认）
+            Task { await serveEmails(conn) }
+
+        case ("GET", "/guestbook"):
+            // 留言簿录制页（婚礼场景：iPad 对准宾客录祝福）
+            let html = WebAssets.guestbookHTML(maxDurationSec: conf.guestbook.maxDurationSec,
+                                               overlayText: conf.guestbook.overlayText)
+            send(conn, HTTPResponse.ok(contentType: "text/html; charset=utf-8",
+                                       body: Data(html.utf8)), thenCancel: true)
+
+        case ("POST", "/guestbook/start"):
+            // 开始录制（限长跟随配置；返回 JSON）
+            GuestbookCommandBridge.shared.start(maxSec: conf.guestbook.maxDurationSec) { result in
+                Task { await self.deliverGuestbookResult(conn, result: result) }
+            }
+
+        case ("POST", "/guestbook/stop"):
+            GuestbookCommandBridge.shared.stop { result in
+                Task { await self.deliverGuestbookResult(conn, result: result) }
+            }
+
+        case ("GET", "/api/guestbook"):
+            serveGuestbookList(conn)
+
+        case ("GET", let p) where p.hasPrefix("/guestbook/video/"):
+            // 留言视频回放（仅限 guestbook 目录内合法文件名，防穿越）
+            serveGuestbookVideo(conn, String(p.dropFirst("/guestbook/video/".count)))
+
         case ("GET", "/ws"):
             upgradeWebSocket(conn, session, req)
 
@@ -414,6 +460,24 @@ public actor BoothWebService: BoothWebServing {
     }
 
     private func servePhoto(_ conn: NWConnection, _ rawID: String) {
+        // .gif 后缀 → Boomerang 动态图；.jpg 后缀兼容旧写法 → 静态成片
+        if rawID.lowercased().hasSuffix(".gif") {
+            let idStr = String(rawID.dropLast(4))
+            guard let id = UUID(uuidString: idStr), let url = gifs[id] else {
+                Log.server.warn("GIF 未注册: \(rawID) → 404（回退静态图也沒有）")
+                send(conn, HTTPResponse.notFound(), thenCancel: true)
+                return
+            }
+            do {
+                let data = try Data(contentsOf: url)
+                send(conn, HTTPResponse.ok(contentType: "image/gif", body: data), thenCancel: true)
+                Log.server.info("提供 Boomerang GIF \(id)（\(data.count) 字节）")
+            } catch {
+                Log.server.error("读取 GIF 文件失败 \(url.path): \(error)")
+                send(conn, HTTPResponse.notFound(), thenCancel: true)
+            }
+            return
+        }
         // 兼容带 .jpg 后缀的写法
         let idStr = rawID.lowercased().hasSuffix(".jpg") ? String(rawID.dropLast(4)) : rawID
         guard let id = UUID(uuidString: idStr), let url = photos[id] else {
@@ -427,6 +491,93 @@ public actor BoothWebService: BoothWebServing {
             Log.server.info("提供照片 \(id)（\(data.count) 字节）")
         } catch {
             Log.server.error("读取照片文件失败 \(url.path): \(error)")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+        }
+    }
+
+    // MARK: - 远程监控 API
+
+    /// /api/health：相机/打印机/磁盘/采集数快照（iPad 或手机浏览器打开）
+    private func serveHealth(_ conn: NWConnection) async {
+        let status = await health.snapshot()
+        do {
+            let data = try JSONEncoder.booth.encode(status)
+            send(conn, HTTPResponse.ok(contentType: "application/json; charset=utf-8",
+                                       body: data), thenCancel: true)
+        } catch {
+            send(conn, HTTPResponse.serverError("health encode 失败"), thenCancel: true)
+        }
+    }
+
+    /// /api/emails：邮箱采集列表 JSON（新→旧；操作员远程查看）
+    private func serveEmails(_ conn: NWConnection) async {
+        let records = await EmailStore.shared.all()
+        struct EmailDTO: Codable { let email: String; let photoID: String?; let time: Date }
+        let dto = records.map { EmailDTO(email: $0.email, photoID: $0.photoID, time: $0.time) }
+        do {
+            let data = try JSONEncoder.booth.encode(dto)
+            send(conn, HTTPResponse.ok(contentType: "application/json; charset=utf-8",
+                                       body: data), thenCancel: true)
+        } catch {
+            send(conn, HTTPResponse.serverError("emails encode 失败"), thenCancel: true)
+        }
+    }
+
+    // MARK: - 视频留言簿（婚礼场景）
+
+    /// POST /guestbook/start|stop 的结果回传（GuestbookCommandBridge 回调 → JSON）
+    private func deliverGuestbookResult(_ conn: NWConnection, result: GuestbookResult) {
+        let obj: [String: Any] = ["ok": result.ok, "file": result.fileName ?? "",
+                                   "error": result.error ?? ""]
+        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) {
+            send(conn, HTTPResponse.ok(contentType: "application/json; charset=utf-8",
+                                       body: data), thenCancel: true)
+        } else {
+            send(conn, HTTPResponse.serverError("guestbook encode 失败"), thenCancel: true)
+        }
+    }
+
+    /// GET /api/guestbook：留言清单（新→旧，带回放 URL）
+    private func serveGuestbookList(_ conn: NWConnection) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(atPath: BoothPaths.guestbookDir.path) else {
+            send(conn, HTTPResponse.ok(contentType: "application/json; charset=utf-8",
+                                       body: Data("{\"videos\":[]}".utf8)), thenCancel: true)
+            return
+        }
+        let videos = files
+            .filter { $0.hasPrefix("guestbook-") && ($0.hasSuffix(".mov") || $0.hasSuffix(".mp4")) }
+            .sorted(by: >)
+            .map { ["file": $0, "url": "/guestbook/video/\($0)"] }
+        let obj: [String: Any] = ["videos": videos]
+        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) {
+            send(conn, HTTPResponse.ok(contentType: "application/json; charset=utf-8",
+                                       body: data), thenCancel: true)
+        } else {
+            send(conn, HTTPResponse.serverError("guestbook list 失败"), thenCancel: true)
+        }
+    }
+
+    /// GET /guestbook/video/<file>：回放（文件名严格白名单防穿越）
+    private func serveGuestbookVideo(_ conn: NWConnection, _ rawName: String) {
+        // 只允许 guestbook-前缀 + 安全字符（字母数字连字符）+ .mov/.mp4 后缀
+        let base = rawName.hasSuffix(".mov") ? String(rawName.dropLast(4))
+                : rawName.hasSuffix(".mp4") ? String(rawName.dropLast(4)) : ""
+        let valid = base.hasPrefix("guestbook-")
+            && base.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+            && !base.contains("/") && !base.contains("..")
+        guard valid else {
+            Log.server.warn("留言视频文件名非法: \(rawName) → 404")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+            return
+        }
+        let url = BoothPaths.guestbookDir.appendingPathComponent(rawName)
+        do {
+            let data = try Data(contentsOf: url)
+            let mime = rawName.hasSuffix(".mp4") ? "video/mp4" : "video/quicktime"
+            send(conn, HTTPResponse.ok(contentType: mime, body: data), thenCancel: true)
+        } catch {
+            Log.server.warn("留言视频不存在: \(rawName)")
             send(conn, HTTPResponse.notFound(), thenCancel: true)
         }
     }
@@ -660,6 +811,27 @@ public actor BoothWebService: BoothWebServing {
             Log.server.info("iPad 指令: 选择滤镜 \(filter.rawValue)")
             commandHub.yield(.selectFilter(filter))
 
+        case "email":
+            // 邮箱采集：{"type":"email","email":"a@b.com","photoId":"uuid"}
+            guard let email = obj["email"] as? String, !email.isEmpty else {
+                Log.server.warn("email 指令缺 email 字段，忽略")
+                return
+            }
+            let photoID = (obj["photoId"] as? String).flatMap { UUID(uuidString: $0) }
+            Log.server.info("iPad 指令: 邮箱采集（\(email)）")
+            commandHub.yield(.submitEmail(email: email, photoID: photoID))
+
+        case "reprint":
+            // 操作员重打：{"type":"reprint","code":"1234","date":"2026-09-29","session":"103012-ab12cd"}
+            guard let code = obj["code"] as? String,
+                  let date = obj["date"] as? String,
+                  let session = obj["session"] as? String else {
+                Log.server.warn("reprint 指令缺字段，忽略")
+                return
+            }
+            Log.server.info("iPad 指令: 操作员重打 \(date)/\(session)")
+            commandHub.yield(.operatorReprint(code: code, date: date, session: session))
+
         default:
             Log.server.warn("未知指令类型: \(obj["type"] ?? "nil")，忽略")
         }
@@ -690,8 +862,10 @@ public actor BoothWebService: BoothWebServing {
             obj["state"] = "review"
             obj["photoId"] = photo.id.uuidString
             obj["copies"] = conf.printing.defaultCopies   // iPad 步进器默认份数
-            // 打印按钮可见性 / 滤镜选择条开关（PhotoBoothProject 借鉴）
+            // 打印按钮可见性 / 滤镜选择条开关 / 邮箱采集入口（PhotoBoothProject 借鉴）
             obj["showPrint"] = conf.printing.showPrintButton
+            obj["showEmail"] = conf.share.emailCapture
+            if photo.gifFile != nil { obj["hasGif"] = true }
             if conf.imaging.filterSelection {
                 obj["filters"] = PhotoFilter.allCases.map { ["id": $0.rawValue, "name": $0.displayName] }
             }

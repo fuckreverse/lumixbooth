@@ -12,8 +12,8 @@ struct GuestIdleView: View {
         ZStack {
             theme.backgroundColor.ignoresSafeArea()
 
-            // 背景历史成片轮播（配置开启时；给路过的宾客看“现场能拍出什么”）
-            if vm.idleSlideshow {
+            // 背景历史成片轮播（配置开启且未省电调暗时；给路过的宾客看“现场能拍出什么”）
+            if vm.idleSlideshow && !vm.idleDimmed {
                 IdleHistorySlideshow()
             }
 
@@ -82,7 +82,15 @@ struct GuestIdleView: View {
                         .padding(24)
                 }
             }
+
+            // 省电调暗罩：待机超过配置分钟后盖半透明黑罩（任何状态变化自动揭罩）
+            if vm.idleDimmed {
+                Color.black.opacity(0.82).ignoresSafeArea()
+                    .transition(.opacity)
+                    .onTapGesture { vm.wakeFromDim() }
+            }
         }
+        .animation(theme.bounce, value: vm.idleDimmed)
     }
 
     /// iPad 确认屏二维码（服务未启动时显示提示）

@@ -115,6 +115,7 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
     case cool       // 冷调
     case mono       // 黑白
     case nostalgia  // 复古
+    case glam       // 妆照（磨皮加强+柔光+轻提亮）
 
     /// 中文显示名（UI 用）
     public var displayName: String {
@@ -125,6 +126,7 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
         case .cool: return "冷调"
         case .mono: return "黑白"
         case .nostalgia: return "复古"
+        case .glam: return "妆照"
         }
     }
 
@@ -137,6 +139,7 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
         case .cool: return "❄️"
         case .mono: return "⚫️"
         case .nostalgia: return "📻"
+        case .glam: return "💄"
         }
     }
 
@@ -155,9 +158,12 @@ public struct ProcessedPhoto: Sendable, Equatable {
     public var originals: [URL]    // 落盘原图
     /// 未滤镜未边框的排版底图（print-base.jpg；拍后换滤镜重打用，nil = 不支持重打）
     public var baseFile: URL?
-    public init(id: UUID, printFile: URL, displayFile: URL, originals: [URL], baseFile: URL? = nil) {
+    /// boomerang.gif 动态图路径（连拍模式生成；nil = 无动态图，QR 回退静态图）
+    public var gifFile: URL?
+    public init(id: UUID, printFile: URL, displayFile: URL, originals: [URL],
+                baseFile: URL? = nil, gifFile: URL? = nil) {
         self.id = id; self.printFile = printFile; self.displayFile = displayFile
-        self.originals = originals; self.baseFile = baseFile
+        self.originals = originals; self.baseFile = baseFile; self.gifFile = gifFile
     }
 }
 

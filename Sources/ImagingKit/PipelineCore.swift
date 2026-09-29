@@ -230,7 +230,12 @@ enum PipelineCore {
     /// 所有 setValue 前检查 inputKeys（写错键名 CoreImage 抛 ObjC 异常接不住）。
     static func applyStyleFilter(_ image: CGImage, filter: PhotoFilter, ctx: CIContext) throws -> CGImage {
         guard filter != .none else { return image }
-        let input = CIImage(cgImage: image)
+        // glam 附带磨皮加强：在滤镜链前先做高强度美肤（后续柔光再叠加通透感）
+        var srcImage = image
+        if filter == .glam {
+            srcImage = try skinSmooth(image, strength: 45, ctx: ctx)
+        }
+        let input = CIImage(cgImage: srcImage)
         var output = input
 
         func chain(_ name: String, _ apply: (CIFilter) -> Void) {
@@ -276,6 +281,33 @@ enum PipelineCore {
             chain("CIVignette") { f in
                 if f.inputKeys.contains("inputIntensity") { f.setValue(0.35, forKey: "inputIntensity") }
                 if f.inputKeys.contains("inputRadius") { f.setValue(1.2, forKey: "inputRadius") }
+            }
+        case .glam:
+            // 妆照风（第七档，借鉴商业软件 Glam）：磨皮加强 + 柔光 + 轻提亮
+            chain("CIColorControls") { f in
+                if f.inputKeys.contains("inputSaturation") { f.setValue(1.12, forKey: "inputSaturation") }
+                if f.inputKeys.contains(kCIInputContrastKey) { f.setValue(1.04, forKey: kCIInputContrastKey) }
+                if f.inputKeys.contains("inputBrightness") { f.setValue(0.06, forKey: "inputBrightness") }
+            }
+            chain("CIExposureAdjust") { f in
+                if f.inputKeys.contains(kCIInputEVKey) { f.setValue(0.25, forKey: kCIInputEVKey) }   // 轻提亮
+            }
+            // 柔光（soft glow）：模糊副本与原图 screen 混合，提亮暗部、提升皮肤通透感
+            if let blur = CIFilter(name: "CIGaussianBlur"),
+               blur.inputKeys.contains(kCIInputImageKey) {
+                blur.setValue(output, forKey: kCIInputImageKey)
+                blur.setValue(6.0, forKey: "inputRadius")
+                if let blurred = blur.outputImage?.cropped(to: input.extent),
+                   let screen = CIFilter(name: "CIScreenBlendMode"),
+                   screen.inputKeys.contains(kCIInputImageKey) {
+                    screen.setValue(blurred, forKey: kCIInputImageKey)
+                    screen.setValue(output, forKey: kCIInputBackgroundImageKey)
+                    if let blended = screen.outputImage { output = blended }
+                }
+            }
+            // 终归一：压缩对比回人像自然区间（防叠加后发灰）
+            chain("CIColorControls") { f in
+                if f.inputKeys.contains(kCIInputContrastKey) { f.setValue(1.05, forKey: kCIInputContrastKey) }
             }
         }
         return try render(output.cropped(to: input.extent), ctx: ctx)

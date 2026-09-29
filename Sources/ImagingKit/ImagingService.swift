@@ -90,6 +90,7 @@ public struct ImagingService: ImagingServing {
         // MARK: ① 原图落盘 + 解码定向
         var photos: [CGImage] = []
         var originalURLs: [URL] = []
+        var decodedRaw: [CGImage] = []   // GIF 帧候选（未修饰原图；修饰后的 photos 不适合做动态图）
         for (index, capture) in originals.enumerated() {
             let stepStart = CFAbsoluteTimeGetCurrent()
             // 原图落盘：sessionDir/original-<序号>-<相机文件名>
@@ -105,6 +106,7 @@ public struct ImagingService: ImagingServing {
             do {
                 let img = try PipelineCore.decodeOriented(capture.data)
                 photos.append(img)
+                decodedRaw.append(img)
                 Log.imaging.debug("解码定向 第\(index + 1)张 \(img.width)x\(img.height) \(elapsedMs(stepStart))ms")
             } catch {
                 Log.imaging.error("解码失败跳过(第\(index + 1)张 \(capture.fileName)): \(error.localizedDescription)")
@@ -243,9 +245,28 @@ public struct ImagingService: ImagingServing {
         Log.imaging.info("修图管线完成: 总耗时 \(totalMs)ms，产物 \(printURL.lastPathComponent)")
 
         let hasBase = FileManager.default.fileExists(atPath: baseURL.path)
+
+        // MARK: ⑤d GIF/Boomerang（拼版模式 + 配置开启才生成；失败只降级不阻断）
+        var gifURL: URL? = nil
+        if mode.kind == .collage, conf.generateGIF, decodedRaw.count >= 2 {
+            let gifStart = CFAbsoluteTimeGetCurrent()
+            let url = sessionDir.appendingPathComponent("boomerang.gif")
+            do {
+                try GIFCore.encodeBoomerang(frames: decodedRaw, to: url)
+                gifURL = url
+                Log.imaging.info("Boomerang GIF 生成完成: \(orderlessFrames(decodedRaw).count)帧 \(elapsedMs(gifStart))ms → boomerang.gif")
+            } catch {
+                Log.imaging.warn("Boomerang GIF 生成失败（QR 回退静态图）: \(error.localizedDescription)")
+            }
+        }
+
         return ProcessedPhoto(id: UUID(), printFile: printURL, displayFile: displayURL,
-                              originals: originalURLs, baseFile: hasBase ? baseURL : nil)
+                              originals: originalURLs, baseFile: hasBase ? baseURL : nil,
+                              gifFile: gifURL)
     }
+
+    /// 帧计数日志辅助（防止内联表达式过长）
+    private func orderlessFrames(_ frames: [CGImage]) -> [CGImage] { frames }
 
     // MARK: - 拍后换滤镜重打（协议扩展的真实现）
 

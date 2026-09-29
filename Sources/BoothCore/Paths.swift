@@ -56,6 +56,26 @@ public enum BoothPaths {
         return dir
     }()
 
+    /// 邮箱采集落盘文件（emails.json：增量追加去重；操作员可导出 CSV）
+    public static let emailsFile: URL = appSupport.appendingPathComponent("emails.json")
+
+    /// 操作员导出邮箱 CSV 的默认目录（可从 Finder 直接拷走）
+    public static let emailsExportDir: URL = {
+        let dir = appSupport.appendingPathComponent("emails-export", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    /// 视频留言簿录制文件目录：guestbook/<yyyy-MM-dd>.mp4（按日归档）
+    public static let guestbookDir: URL = {
+        let dir = appSupport.appendingPathComponent("guestbook", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    /// /api/health 状态快照落盘（进程崩溃后仍可查最后一次状态）
+    public static let healthStatusFile: URL = appSupport.appendingPathComponent("health.json")
+
     /// 新建一次拍照会话目录：sessions/<yyyy-MM-dd>/<HHmmss-短id>/
     public static func newSessionDir(now: Date = Date()) -> URL {
         let day = DateFormatter.boothDay.string(from: now)

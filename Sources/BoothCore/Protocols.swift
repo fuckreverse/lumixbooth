@@ -129,4 +129,8 @@ public enum iPadCommand: Sendable, Equatable {
     case selectMode(ShootMode)
     /// REVIEW 态选择滤镜（拍后自选滤镜）
     case selectFilter(PhotoFilter)
+    /// 邮箱采集（线索采集）：宾客填邮箱领电子版，仅落盘不发送
+    case submitEmail(email: String, photoID: UUID?)
+    /// 操作员重打：/gallery 页验口令后的补打指令（date=日期目录名，session=会话目录名）
+    case operatorReprint(code: String, date: String, session: String)
 }

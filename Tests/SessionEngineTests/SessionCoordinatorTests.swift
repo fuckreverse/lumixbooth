@@ -685,4 +685,55 @@ final class SessionCoordinatorTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(startedAt)
         XCTAssertLessThan(elapsed, 3.0, "printingDwellSec=1 时回 idle 应明显早于硬编码 3s，实际 \(elapsed)s")
     }
+
+    // MARK: - 操作员重打（/gallery 长按补打）
+
+    /// 重打指令：错误口令拒绝、路径穿越拒绝、正确口令按默认份数入队
+    func testOperatorReprintCodeAndPathValidation() async {
+        await configure { c in
+            c.security.reprintCode = "4321"
+            c.printing.defaultCopies = 2
+        }
+        // 在真实 sessions 目录造一个历史会话成片（test 标记，测完清理）
+        let fm = FileManager.default
+        let date = "2099-99-99"
+        let session = "testsession-reprint"
+        let sessionDir = BoothPaths.sessionsDir
+            .appendingPathComponent(date, isDirectory: true)
+            .appendingPathComponent(session, isDirectory: true)
+        try? fm.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let printFile = sessionDir.appendingPathComponent("print.jpg")
+        try? Data("fake".utf8).write(to: printFile)
+        defer { try? fm.removeItem(at: sessionDir) }
+
+        let coord = makeSUT()
+        await coord.begin()
+        let printer = self.printer
+
+        // 错误口令：不应入队
+        server.send(.operatorReprint(code: "0000", date: date, session: session))
+        // 路径穿越：date 含 ../ 应被清洗拒绝
+        server.send(.operatorReprint(code: "4321", date: "../../etc", session: session))
+        // 正确口令 + 合法路径：应入队
+        server.send(.operatorReprint(code: "4321", date: date, session: session))
+
+        await expect("正确口令重打应恰好入队 1 单") { await printer.submitted.count == 1 }
+        XCTAssertEqual(printer.submitted.first?.imagePath, printFile.path,
+                       "应重打 sessions/<date>/<session>/print.jpg")
+        XCTAssertEqual(printer.submitted.first?.copies, 2, "重打份数用配置默认份数")
+    }
+
+    // MARK: - 邮箱采集指令
+
+    /// submitEmail 指令：非法邮箱被 EmailStore 拒绝，不写真实 emails.json
+    func testSubmitEmailCommandRejectsInvalid() async {
+        let coord = makeSUT()
+        await coord.begin()
+        let before = await EmailStore.shared.count
+        server.send(.submitEmail(email: "not-an-email", photoID: nil))
+        server.send(.submitEmail(email: "also bad@example", photoID: nil))
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let after = await EmailStore.shared.count
+        XCTAssertEqual(after, before, "非法邮箱不应入库（不污染真实 emails.json）")
+    }
 }

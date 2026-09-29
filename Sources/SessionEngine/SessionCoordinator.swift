@@ -34,6 +34,20 @@ public actor SessionCoordinator {
 
     /// 当前流程状态（UI / 测试轮询入口）
     public private(set) var state: BoothState = .idle
+    /// 状态简短文本（健康面板 /api/health 用；与日志 describe 同源）
+    public var stateDescription: String {
+        switch state {
+        case .idle: return "idle"
+        case .armed: return "armed"
+        case .gestureWait: return "gestureWait"
+        case .countdown(let n): return "countdown(\(n))"
+        case .capturing(let shot, let of): return "capturing(\(shot)/\(of))"
+        case .processing: return "processing"
+        case .review: return "review"
+        case .printing(let copies): return "printing(x\(copies))"
+        case .failure: return "failure"
+        }
+    }
     /// 当前拍摄模式（IDLE 页可选，begin() 时从配置加载默认值）
     public private(set) var mode: ShootMode = .collage(4)
     private var modeLoaded = false
@@ -351,6 +365,7 @@ public actor SessionCoordinator {
                 while n > 0 {
                     await transition(.countdown(secondsLeft: n), reason: "第 \(shot)/\(shots) 张倒计时")
                     await bus.publish(.countdownTick(n))
+                    SoundEffects.shared.play(.countdownBeep, conf: cfg.sounds)
                     Log.session.info("倒计时 tick=\(n)（第 \(shot)/\(shots) 张）")
                     do {
                         try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -364,6 +379,7 @@ public actor SessionCoordinator {
 
             await transition(.capturing(shot: shot, of: shots),
                              reason: shots > 1 ? "连拍第 \(shot)/\(shots) 张" : "快门")
+            SoundEffects.shared.play(.shutter, conf: cfg.sounds)
             guard let cap = await captureWithRetry(cfg) else { return } // 失败已转 failure 态
             originals.append(cap)
             Log.session.info("第 \(shot)/\(shots) 张拍摄完成 \(cap.fileName)（\(cap.data.count)B）")
@@ -431,9 +447,11 @@ public actor SessionCoordinator {
         let clamped = min(max(copies, cfg.printing.minCopies), cfg.printing.maxCopies)
         await transition(.printing(copies: clamped), reason: reason)
         // 打印 QR 叠印（PhotoBoothProject 借鉴）：把电子版下载链接印到成片右缘
+        // 有 Boomerang GIF 时优先指向动态图（扫码即看会动的照片）
         if cfg.printing.printQRCode, let server, server.port > 0 {
             let host = LANAddress.localIPv4() ?? "127.0.0.1"
-            let content = "http://\(host):\(server.port)/photo/\(photo.id.uuidString)"
+            let gifSuffix = photo.gifFile != nil ? ".gif" : ""
+            let content = "http://\(host):\(server.port)/photo/\(photo.id.uuidString)\(gifSuffix)"
             do {
                 photo = try await imaging.overlayQR(content: content, on: photo)
             } catch {
@@ -454,6 +472,7 @@ public actor SessionCoordinator {
                 autoArmSuppressedUntil = Date().addingTimeInterval(cooldown)
                 Log.session.info("打印完成回待机，自动触发冷却 \(cooldown)s（期间可手动/按钮开始下一轮）")
             }
+            SoundEffects.shared.play(.printDone, conf: cfg.sounds)
             await resetToIdle("打印完成，回待机")
         }
     }
@@ -502,8 +521,40 @@ public actor SessionCoordinator {
                 await setMode(m)
             case .selectFilter(let filter):
                 await selectFilter(filter)
+            case .submitEmail(let email, let photoID):
+                // 邮箱采集：仅落盘不发送（EmailStore 负责校验/去重）
+                let ok = await EmailStore.shared.append(email: email, photoID: photoID?.uuidString)
+                Log.session.info("iPad 指令: 邮箱采集 \(ok ? "成功" : "被拒（格式非法）")")
+            case .operatorReprint(let code, let date, let session):
+                await handleOperatorReprint(code: code, date: date, session: session)
             }
         }
+    }
+
+    /// /gallery 操作员重打：验口令通过才允许补打历史成片
+    private func handleOperatorReprint(code: String, date: String, session: String) async {
+        let cfg = await config.config
+        guard code == cfg.security.reprintCode else {
+            Log.session.warn("操作员重打口令错误，已拒绝")
+            return
+        }
+        // 路径拼接前清洗（防 ../ 穿越：只允许安全字符）
+        let safeDate = date.allSatisfy { $0.isNumber || $0 == "-" } ? date : ""
+        let safeSession = session.allSatisfy { $0.isNumber || $0.isLetter || $0 == "-" } ? session : ""
+        guard !safeDate.isEmpty, !safeSession.isEmpty else {
+            Log.session.warn("重打路径非法，已拒绝")
+            return
+        }
+        let printURL = BoothPaths.sessionsDir
+            .appendingPathComponent(safeDate, isDirectory: true)
+            .appendingPathComponent(safeSession, isDirectory: true)
+            .appendingPathComponent("print.jpg")
+        guard FileManager.default.fileExists(atPath: printURL.path) else {
+            Log.session.warn("重打成片不存在: \(safeDate)/\(safeSession)")
+            return
+        }
+        let job = await printer.submit(image: printURL, copies: cfg.printing.defaultCopies)
+        Log.session.info("操作员重打入队 job=\(job.id.uuidString.prefix(8)) 路径=\(safeDate)/\(safeSession) copies=\(job.copies)")
     }
 
     // MARK: - 超时任务

@@ -101,6 +101,14 @@ enum WebAssets {
                      -webkit-touch-callout:none; }
 
           .fail { background:#FFE3E3; color:#C0392B; border-radius:24px; padding:26px 38px; font-size:24px; }
+
+          .email-row { display:flex; gap:10px; align-items:center; margin:14px 0 0; }
+          .email-row input { flex:1; font-size:17px; padding:12px 16px; border-radius:14px;
+                             border:2px solid #FFD5DE; background:#fff; color:var(--ink);
+                             -webkit-user-select:text; user-select:text; }
+          .email-row input:focus { outline:none; border-color:var(--peach); }
+          .email-ok { justify-content:center; font-size:17px; color:#4CAF50; background:#EAF7EA;
+                      border-radius:14px; padding:10px; }
         </style>
         </head>
         <body>
@@ -108,11 +116,11 @@ enum WebAssets {
           <header>LUMIX 拍照屋</header>
           <div id="livebox"><img id="liveimg" alt="实时取景" src="/live"></div>
           <main><div class="card" id="stage"></div></main>
-          <div class="links"><a href="/gallery"><img class="tic" src="/theme/icon/album.png" onerror="this.outerHTML='📖'"> 相册</a><a href="/slideshow"><img class="tic" src="/theme/icon/film.png" onerror="this.outerHTML='🎞️'"> 放映</a></div>
+          <div class="links"><a href="/gallery"><img class="tic" src="/theme/icon/album.png" onerror="this.outerHTML='📖'"> 相册</a><a href="/slideshow"><img class="tic" src="/theme/icon/film.png" onerror="this.outerHTML='🎞️'"> 放映</a><a href="/guestbook">💌 留言簿</a></div>
 
         <script>
         var ws = null, cur = null, copies = 2, modeKind = 'collage', takeTimer = null;
-        var filters = null, curFilter = 'none', showPrint = true;
+        var filters = null, curFilter = 'none', showPrint = true, showEmail = false, curPhotoId = null, emailDone = false;
 
         var dot     = document.getElementById('dot');
         var stage   = document.getElementById('stage');
@@ -169,7 +177,9 @@ enum WebAssets {
             copies = m.copies || 2;
             if (m.filters) { filters = m.filters; }
             if (typeof m.showPrint === 'boolean') { showPrint = m.showPrint; }
-            if (cur !== 'review') { curFilter = 'none'; }   // 新一轮流程回到原片
+            if (typeof m.showEmail === 'boolean') { showEmail = m.showEmail; }
+            if (cur !== 'review') { curFilter = 'none'; emailDone = false; }   // 新一轮流程回到原片
+            curPhotoId = m.photoId;
             renderReview(m.photoId);
             return;
           }
@@ -237,9 +247,20 @@ enum WebAssets {
               '</div>' +
               '<button class="btn btn-peach" id="btn-print">打印 ' + ic('printer', '🖨️') + '</button>'
             : '';
+          // 邮箱采集条：输邮箱领电子版（活动营销；仅落盘不发送）
+          var emailRow = (showEmail && !emailDone)
+            ? '<div class="email-row">' +
+                '<input type="email" id="email-input" placeholder="输入邮箱领电子版" ' +
+                'autocomplete="off" autocapitalize="off" spellcheck="false">' +
+                '<button class="btn btn-ghost" id="btn-email">发送 ' + ic('mail', '✉️') + '</button>' +
+              '</div>'
+            : (emailDone
+                ? '<div class="email-row email-ok">✅ 已收到，稍后会发到你邮箱</div>'
+                : '');
           stage.innerHTML =
             '<img class="photo" src="/photo/' + photoId + '?t=' + Date.now() + '">' +
             filterRow +
+            emailRow +
             '<div class="controls">' +
               printControls +
               '<button class="btn btn-ghost" id="btn-retake">重拍 ' + ic('retake', '🔄') + '</button>' +
@@ -287,6 +308,24 @@ enum WebAssets {
           }
           if (b.id === 'btn-print')  { send({ type: 'print', copies: copies }); }
           if (b.id === 'btn-retake') { send({ type: 'retake' }); }
+          if (b.id === 'btn-email') {
+            var inp = document.getElementById('email-input');
+            var v = inp ? inp.value.trim() : '';
+            if (!v) { if (inp) inp.focus(); return; }
+            send({ type: 'email', email: v, photoId: curPhotoId });
+            emailDone = true;
+            var row = b.closest('.email-row');
+            if (row) { row.outerHTML = '<div class="email-row email-ok">✅ 已收到，稍后会发到你邮箱</div>'; }
+          }
+        });
+
+        // 邮箱输入回车提交
+        stage.addEventListener('keydown', function (ev) {
+          if (ev.key !== 'Enter') return;
+          if (ev.target && ev.target.id === 'email-input') {
+            var btn = document.getElementById('btn-email');
+            if (btn) btn.click();
+          }
         });
 
         render({ state: 'idle' });
@@ -353,6 +392,7 @@ enum WebAssets {
         <div class="empty" id="empty" style="display:none">
           <span class="emoji"><img class="eic" src="/theme/icon/mailbox.png" onerror="this.outerHTML='📭'"></span>还没有成片，拍一张就有了
         </div>
+        <div class="op-hint">长按任意成片可操作员补打（需口令）</div>
         <style>
           #grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; padding:14px; }
           #grid img { width:100%; display:block; border-radius:18px; border:6px solid #fff;
@@ -361,8 +401,35 @@ enum WebAssets {
                       align-items:center; justify-content:center; z-index:9; }
           #lightbox img { max-width:94vw; max-height:92vh; border-radius:24px;
                           border:8px solid #fff; }
+          .op-hint { text-align:center; font-size:13px; opacity:.45; padding:8px 0 16px; }
+          #reprint-dialog { position:fixed; inset:0; background:rgba(91,74,79,.55); display:none;
+                            align-items:center; justify-content:center; z-index:99; }
+          #reprint-dialog .box { background:#fff; border-radius:22px; padding:26px 30px; text-align:center;
+                                 box-shadow:0 16px 50px rgba(0,0,0,.25); }
+          #reprint-dialog img { width:120px; border-radius:12px; border:4px solid #fff;
+                                margin-bottom:14px; }
+          #reprint-dialog .tip { font-size:15px; color:#5B4A4F; margin-bottom:12px; }
+          #reprint-dialog input { font-size:20px; text-align:center; letter-spacing:6px; width:170px;
+                                  padding:10px 14px; border-radius:12px; border:2px solid #FFD5DE;
+                                  -webkit-user-select:text; user-select:text; margin-bottom:14px; }
+          #reprint-dialog input:focus { outline:none; border-color:#FF8FAB; }
+          #reprint-dialog button { font-size:17px; font-weight:700; padding:12px 30px; border-radius:14px;
+                                   border:none; margin:0 8px; cursor:pointer; }
+          #reprint-dialog .ok { background:#FF8FAB; color:#fff; }
+          #reprint-dialog .cancel { background:#F1EAE6; color:#5B4A4F; }
         </style>
         <div id="lightbox"><img id="lightbox-img" alt="成片大图"></div>
+        <div id="reprint-dialog">
+          <div class="box">
+            <img id="reprint-thumb" alt="待补打成片">
+            <div class="tip">操作员补打：验证口令后重新打印</div>
+            <input type="password" id="reprint-code" placeholder="口令" inputmode="numeric">
+            <div>
+              <button class="cancel" id="reprint-cancel">取消</button>
+              <button class="ok" id="reprint-go">补打 🖨️</button>
+            </div>
+          </div>
+        </div>
         """#,
         script: #"""
         var grid = document.getElementById('grid');
@@ -375,7 +442,8 @@ enum WebAssets {
             return;
           }
           grid.innerHTML = photos.map(function (p) {
-            return '<img src="' + p.url + '" loading="lazy" data-full="' + p.url + '" alt="成片">';
+            return '<img src="' + p.url + '" loading="lazy" data-full="' + p.url +
+                   '" data-date="' + p.date + '" data-session="' + p.session + '" alt="成片">';
           }).join('');
         }
 
@@ -385,6 +453,62 @@ enum WebAssets {
           lightbox.style.display = 'flex';
         });
         lightbox.addEventListener('click', function () { lightbox.style.display = 'none'; });
+
+        // ---------- 操作员重打（长按 800ms 弹口令窗） ----------
+        var dlg = document.getElementById('reprint-dialog');
+        var dlgThumb = document.getElementById('reprint-thumb');
+        var dlgCode = document.getElementById('reprint-code');
+        var reprintTarget = null, pressTimer = null;
+
+        function openReprint(img) {
+          reprintTarget = { date: img.dataset.date, session: img.dataset.session };
+          dlgThumb.src = img.dataset.full;
+          dlgCode.value = '';
+          dlg.style.display = 'flex';
+          setTimeout(function () { dlgCode.focus(); }, 60);
+        }
+        function closeReprint() { dlg.style.display = 'none'; reprintTarget = null; }
+
+        // 长按：触摸与鼠标双路径；期间移动则取消（避免与滚动冲突）
+        grid.addEventListener('touchstart', function (ev) {
+          if (ev.target.tagName !== 'IMG') return;
+          var img = ev.target;
+          pressTimer = setTimeout(function () { openReprint(img); }, 800);
+        }, { passive: true });
+        grid.addEventListener('touchmove', function () { clearTimeout(pressTimer); }, { passive: true });
+        grid.addEventListener('touchend', function () { clearTimeout(pressTimer); });
+        grid.addEventListener('mousedown', function (ev) {
+          if (ev.target.tagName !== 'IMG') return;
+          var img = ev.target;
+          pressTimer = setTimeout(function () { openReprint(img); }, 800);
+        });
+        ['mousemove', 'mouseup', 'mouseleave'].forEach(function (e) {
+          grid.addEventListener(e, function () { clearTimeout(pressTimer); });
+        });
+
+        document.getElementById('reprint-cancel').addEventListener('click', closeReprint);
+        dlg.addEventListener('click', function (ev) { if (ev.target === dlg) closeReprint(); });
+        document.getElementById('reprint-go').addEventListener('click', function () {
+          if (!reprintTarget) return;
+          var code = dlgCode.value.trim();
+          if (!code) { dlgCode.focus(); return; }
+          var payload = JSON.stringify({ type: 'reprint', code: code,
+                                         date: reprintTarget.date, session: reprintTarget.session });
+          reprintWS.send(payload);
+          closeReprint();
+        });
+        dlgCode.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter') document.getElementById('reprint-go').click();
+        });
+
+        // 重打指令走独立 WS（gallery 页无主控状态流）
+        var reprintWS = null;
+        (function connectWS() {
+          try { reprintWS = new WebSocket('ws://' + location.host + '/ws'); }
+          catch (e) { setTimeout(connectWS, 3000); return; }
+          reprintWS.onclose = function () { setTimeout(connectWS, 3000); };
+          reprintWS.onerror = function () { try { reprintWS.close(); } catch (e) {} };
+        })();
 
         fetchPhotos().then(render);
         setTimeout(function () { fetchPhotos().then(render); }, 60000);
@@ -447,5 +571,107 @@ enum WebAssets {
               });
             }, 60000);
             """# + fetchScript)
+    }
+
+    // MARK: - 视频留言簿（婚礼场景）
+
+    /// /guestbook 录制页：大按钮开始/停止 + 时长进度 + 留言列表回放
+    static func guestbookHTML(maxDurationSec: Int, overlayText: String) -> String {
+        pageShell(
+            title: "💌 留言簿",
+            bodyHTML: #"""
+            <div id="gb-main">
+              <div id="overlay-text"></div>
+              <div class="big-btn" id="btn-record">按下开始<br>录制祝福</div>
+              <div id="rec-state"></div>
+              <div id="rec-bar"><div id="rec-fill"></div></div>
+            </div>
+            <div id="gb-list"></div>
+            <style>
+              #gb-main { padding:64px 20px 10px; text-align:center; position:relative; }
+              .big-btn { display:inline-block; width:220px; height:220px; border-radius:50%;
+                         background:#FF8FAB; color:#fff; font-size:26px; font-weight:700;
+                         line-height:1.5; padding-top:78px; margin-top:24px;
+                         box-shadow:0 12px 34px rgba(255,143,171,.45); }
+              .big-btn.rec { background:#E74C3C; box-shadow:0 12px 34px rgba(231,76,60,.5); }
+              #rec-state { font-size:20px; margin-top:16px; color:#5B4A4F; }
+              #rec-bar { width:260px; height:8px; background:#F1EAE6; border-radius:4px;
+                         margin:12px auto 0; overflow:hidden; display:none; }
+              #rec-fill { height:100%; width:0%; background:#E74C3C; }
+              #overlay-text { position:absolute; top:16px; left:0; right:0; font-size:22px;
+                              font-weight:700; color:#FF8FAB; letter-spacing:4px; }
+              #gb-list { padding:10px 20px 30px; }
+              #gb-list h3 { text-align:center; font-size:18px; margin:18px 0 10px; }
+              #gb-list video { display:block; width:100%; border-radius:16px; margin-bottom:14px;
+                                background:#000; }
+            </style>
+            """#,
+            script: #"""
+            var MAXSEC = \#(max(5, maxDurationSec));
+            var OVERLAY = "\#(overlayText)";
+            var btn = document.getElementById('btn-record');
+            var state = document.getElementById('rec-state');
+            var bar = document.getElementById('rec-bar');
+            var fill = document.getElementById('rec-fill');
+            var recTimer = null, recStart = 0, recording = false;
+
+            if (OVERLAY) { document.getElementById('overlay-text').textContent = '“' + OVERLAY + '”'; }
+
+            btn.addEventListener('click', function () { recording ? doStop() : doStart(); });
+
+            function doStart() {
+              fetch('/guestbook/start', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  if (!d.ok) { state.textContent = d.error || '启动失败'; return; }
+                  recording = true;
+                  btn.classList.add('rec');
+                  btn.innerHTML = '按下<br>结束录制';
+                  bar.style.display = 'block';
+                  recStart = Date.now();
+                  tickRec();
+                  recTimer = setInterval(tickRec, 200);
+                })
+                .catch(function () { state.textContent = '网络错误，稍后再试'; });
+            }
+
+            function tickRec() {
+              var elapsed = (Date.now() - recStart) / 1000;
+              var left = Math.max(0, MAXSEC - elapsed);
+              state.textContent = '录制中… 剩余 ' + Math.ceil(left) + ' 秒';
+              fill.style.width = Math.min(100, elapsed / MAXSEC * 100) + '%';
+              if (left <= 0) doStop();
+            }
+
+            function doStop() {
+              clearInterval(recTimer); recTimer = null;
+              fetch('/guestbook/stop', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  recording = false;
+                  btn.classList.remove('rec');
+                  btn.innerHTML = '按下开始<br>录制祝福';
+                  bar.style.display = 'none';
+                  fill.style.width = '0%';
+                  state.textContent = d.ok ? '✅ 已保存，感谢祝福！' : (d.error || '已停止');
+                  if (d.ok) setTimeout(loadList, 600);
+                })
+                .catch(function () { recording = false; state.textContent = '网络错误'; });
+            }
+
+            function loadList() {
+              fetch('/api/guestbook').then(function (r) { return r.json(); })
+                .then(function (d) {
+                  var list = document.getElementById('gb-list');
+                  var vids = d.videos || [];
+                  var html = vids.length ? '<h3>👏 已收到 ' + vids.length + ' 条祝福</h3>' : '';
+                  list.innerHTML = html + vids.slice(0, 10).map(function (v) {
+                    return '<video src="' + v.url + '" controls preload="metadata"></video>';
+                  }).join('');
+                })
+                .catch(function () {});
+            }
+            loadList();
+            """#)
     }
 }

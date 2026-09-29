@@ -13,12 +13,15 @@ struct OperatorScreen: View {
     @StateObject private var settingsVM = OpSettingsViewModel()
     @StateObject private var historyVM: OpHistoryViewModel
     @StateObject private var logsVM = OpLogsViewModel()
+    @StateObject private var healthVM: OpHealthViewModel
 
     init(composition: AppComposition) {
         _composition = ObservedObject(wrappedValue: composition)
         _statusVM = StateObject(wrappedValue: OpStatusViewModel(
             camera: composition.camera, printer: composition.printer))
         _historyVM = StateObject(wrappedValue: OpHistoryViewModel(printer: composition.printer))
+        _healthVM = StateObject(wrappedValue: OpHealthViewModel(health: composition.health,
+                                                               printer: composition.printer))
     }
 
     var body: some View {
@@ -43,7 +46,7 @@ struct OperatorScreen: View {
             .padding(.vertical, 16)
 
             TabView {
-                OpStatusTab(vm: statusVM, serverRunning: composition.serverRunning, iPadURL: composition.iPadURL)
+                OpStatusTab(vm: statusVM, healthVM: healthVM, serverRunning: composition.serverRunning, iPadURL: composition.iPadURL)
                     .tabItem { Label("状态", systemImage: "heart.text.square") }
                 OpSettingsTab(vm: settingsVM, gate: composition.gate)
                     .tabItem { Label("设置", systemImage: "gearshape") }
@@ -60,6 +63,7 @@ struct OperatorScreen: View {
             settingsVM.start()
             logsVM.start()
             historyVM.reload()
+            healthVM.start()
         }
     }
 }

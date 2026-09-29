@@ -23,7 +23,6 @@ final class OpStatusViewModel: ObservableObject {
         self.camera = camera
         self.printer = printer
     }
-
     func start() {
         guard !started else { return }
         started = true
@@ -47,6 +46,61 @@ final class OpStatusViewModel: ObservableObject {
 
     func retry(jobID: UUID) { Task { await printer.retry(jobID: jobID) } }
     func remove(jobID: UUID) { Task { await printer.remove(jobID: jobID) } }
+}
+
+// MARK: - 健康面板（操作员卡片：CUPS / 磁盘 / 采集数 + 手动刷新）
+
+@MainActor
+final class OpHealthViewModel: ObservableObject {
+    @Published private(set) var status: HealthStatus?
+    @Published private(set) var refreshing = false
+    /// 邮箱 CSV 导出结果提示（3s 自动清除）
+    @Published var exportNotice: String?
+
+    private let health: HealthMonitor
+    private var task: Task<Void, Never>?
+    private var started = false
+
+    init(health: HealthMonitor, printer: any PrintServing) {
+        self.health = health
+    }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        refresh()
+        task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)  // 30s 同步一次
+                self?.refresh()
+            }
+        }
+    }
+
+    func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.status = await self.health.checkNow()
+            self.refreshing = false
+        }
+    }
+
+    /// 邮箱 CSV 导出（落 emails-export/ 目录并在 Finder 显示）
+    func exportEmailsCSV() {
+        Task { [weak self] in
+            do {
+                let url = try await EmailStore.shared.exportCSV()
+                self?.exportNotice = "已导出 → \(url.lastPathComponent)"
+                NSWorkspace.shared.open(url.deletingLastPathComponent())
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self?.exportNotice = nil
+            } catch {
+                self?.exportNotice = "导出失败：\(error.localizedDescription)"
+            }
+        }
+    }
 }
 
 // MARK: - 设置页

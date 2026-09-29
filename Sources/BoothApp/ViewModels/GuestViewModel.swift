@@ -63,6 +63,13 @@ final class GuestViewModel: ObservableObject {
     private var tasks: [Task<Void, Never>] = []
     private var started = false
 
+    // ---- 省电模式（idle N 分钟调暗大屏/暂停轮播） ----
+    /// 待机超过阈值后置 true（GuestIdleView 盖半透明黑罩 + 停轮播）
+    @Published private(set) var idleDimmed = false
+    /// 省电阈值分钟（0 = 关闭；热更新生效）
+    private var idleDimAfterMin = 10
+    private var idleTimer: Task<Void, Never>?
+
     init(coordinator: SessionCoordinator, camera: any CameraServicing) {
         self.coordinator = coordinator
         self.camera = camera
@@ -79,6 +86,8 @@ final class GuestViewModel: ObservableObject {
             guard let self else { return }
             for await s in await self.coordinator.states() {
                 self.state = s
+                // 省电模式：任何状态变化都重置待机调暗计时（状态离开 idle 即亮屏）
+                self.resetIdleDim()
                 // 回到待机/引导阶段时刷新模式与默认份数（iPad 可能改过）
                 switch s {
                 case .idle, .armed, .gestureWait:
@@ -123,6 +132,25 @@ final class GuestViewModel: ObservableObject {
             self.printKeyEnabled = cfg.printing.printKeyEnabled
             self.showPrintButton = cfg.printing.showPrintButton
             self.idleSlideshow = cfg.capture.idleSlideshow
+            self.idleDimAfterMin = cfg.capture.idleDimAfterMin
+            // 配置热更新后重估当前待机调暗状态
+            self.resetIdleDim()
+        }
+    }
+
+    // MARK: - 省电模式（借鉴商业软件 idle dim）
+
+    /// 重置待机计时：离开 idle / 配置变更时调；idle 中重新挂 N 分钟闹钟
+    private func resetIdleDim() {
+        idleTimer?.cancel()
+        idleDimmed = false
+        guard idleDimAfterMin > 0, case .idle = state else { return }
+        let minutes = idleDimAfterMin
+        idleTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(minutes) * 60_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.idleDimmed = true   // 触发大屏盖罩 + 停轮播
+            Log.ui.info("省电模式：待机 \(minutes) 分钟，大屏调暗/暂停轮播")
         }
     }
 
@@ -161,5 +189,11 @@ final class GuestViewModel: ObservableObject {
         currentFilter = filter // 先本地高亮
         Task { await coordinator.selectFilter(filter) }
         Log.ui.info("宾客选择滤镜：\(filter.displayName)")
+    }
+
+    /// 省电调暗下触碰大屏：揭罩回亮（轮播恢复；重新计时）
+    func wakeFromDim() {
+        resetIdleDim()
+        Log.ui.info("省电调暗下触碰大屏，已揭罩回亮")
     }
 }

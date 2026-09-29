@@ -22,6 +22,15 @@ private enum CompositionHolder {
     @MainActor static weak var composition: AppComposition?
 }
 
+/// 组装期依赖环破解盒：health 需要读 coordinator 状态，但 coordinator
+/// 构造需要 server，server 构造需要 health —— 用可后置的引用盒解开环
+private final class CoordinatorRef: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: SessionCoordinator?
+    var coordinator: SessionCoordinator? { lock.withLock { value } }
+    func set(_ c: SessionCoordinator) { lock.withLock { value = c } }
+}
+
 /// 应用组装根：唯一持有全部模块实例的地方
 @MainActor
 final class AppComposition: ObservableObject {
@@ -35,6 +44,8 @@ final class AppComposition: ObservableObject {
     let printer: PrintService
     let server: BoothWebService
     let coordinator: SessionCoordinator
+    /// 健康监控（操作员页卡片 + /api/health 数据源；周期采样落盘 health.json）
+    let health: HealthMonitor
 
     /// 是否显示操作员页（Esc / 齿轮按钮切换）
     @Published var showingOperator = false
@@ -86,13 +97,20 @@ final class AppComposition: ObservableObject {
         // ⑤ iPad Web 服务：同步读一遍配置文件快照（ConfigStore 是 actor 不能同步读，
         //    这里直接解码同一 config.json，数据一致；BoothWebService 构造时需要端口）
         let conf = Self.loadConfigSnapshot()
-        server = BoothWebService(conf: conf)
+        // ⑦ 健康监控（先于 server 构造：server 的 /api/health 用同一个实例，
+        //    状态机后置注入经 CoordinatorRef，解决 health→coordinator→server→health 依赖环）
+        let coordRef = CoordinatorRef()
+        health = HealthMonitor.live(camera: camera, stateProvider: { [coordRef] in
+            await coordRef.coordinator?.stateDescription ?? "starting"
+        })
+        server = BoothWebService(conf: conf, health: health)
         quitProtection = conf.security.quitProtection
         Log.ui.info("模块[5/6] 服务 = BoothWebService（端口 \(conf.server.port)）")
         // ⑥ 状态机：注入全部协议服务
         coordinator = SessionCoordinator(
             camera: camera, gesture: gesture, readiness: readiness,
             imaging: imaging, printer: printer, server: server)
+        coordRef.set(coordinator)
         Log.ui.info("模块[6/6] 状态机 = SessionCoordinator（全依赖注入完成）")
         Log.ui.info("═══ App 组装完成 ═══")
     }
@@ -118,6 +136,34 @@ final class AppComposition: ObservableObject {
         // 状态机后台运行（内部自动尝试相机 connect + startLiveView，失败靠 CameraKit 重连）
         await coordinator.begin()
         Log.ui.info("状态机已后台运行（相机连接交给 CameraKit 自重连）")
+
+        // 健康监控周期采样（30s 一次落盘 health.json；/api/health 实时取）
+        await health.start(every: 30)
+        Log.ui.info("健康监控已启动（30s 采样）")
+
+        // 留言簿指令桥：把 GuestbookRecorder 的能力装进 BoothCore 桥
+        // （BoothServer 的 /guestbook/start|stop 路由经桥调到这里）
+        GuestbookCommandBridge.shared.install(
+            enabled: cfg.guestbook.enabled,
+            start: { maxSec, completion in
+                guard GuestbookRecorder.shared.configure() else {
+                    completion(GuestbookResult(ok: false, error: "未找到可用相机，无法录制"))
+                    return
+                }
+                if let file = GuestbookRecorder.shared.start(maxSec: maxSec) {
+                    completion(GuestbookResult(ok: true, fileName: file.lastPathComponent))
+                } else {
+                    completion(GuestbookResult(ok: false, error: "已在录制中，请先结束当前留言"))
+                }
+            },
+            stop: { completion in
+                if let file = GuestbookRecorder.shared.stop() {
+                    completion(GuestbookResult(ok: true, fileName: file.lastPathComponent))
+                } else {
+                    completion(GuestbookResult(ok: false, error: "当前没有正在录制的留言"))
+                }
+            })
+        Log.ui.info("留言簿桥已装配（enabled=\(cfg.guestbook.enabled)）")
 
         // 门禁快照加载（是否有 PIN / 是否放弃保护）
         await gate.refreshState()
@@ -159,6 +205,9 @@ final class AppComposition: ObservableObject {
                 if first { first = false; continue } // 首帧是当前值，跳过
                 self.quitProtection = cfg.security.quitProtection
                 await self.printer.applyConfig(cfg.printing)
+                // 留言簿开关即时生效（关闭时顺带停掉相机会话省资源）
+                GuestbookCommandBridge.shared.setEnabled(cfg.guestbook.enabled)
+                if !cfg.guestbook.enabled { GuestbookRecorder.shared.shutdown() }
                 if cfg.server.enabled, !self.serverRunning {
                     Log.ui.info("配置变更：Web 服务打开，正在启动…")
                     await self.startServer()
@@ -172,10 +221,12 @@ final class AppComposition: ObservableObject {
         }
     }
 
-    /// 退出前清理：停 Web 服务 + 断相机
+    /// 退出前清理：停 Web 服务 + 停留言簿相机 + 断相机
     func shutdown() async {
         Log.ui.info("退出清理：停止 Web 服务…")
         await server.stop()
+        Log.ui.info("退出清理：停留言簿相机…")
+        GuestbookRecorder.shared.shutdown()
         Log.ui.info("退出清理：断开相机…")
         await camera.disconnect()
         configWatchTask?.cancel()

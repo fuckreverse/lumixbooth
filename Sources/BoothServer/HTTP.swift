@@ -108,6 +108,13 @@ enum HTTPResponse {
               body: Data(message.utf8))
     }
 
+    /// 500
+    static func serverError(_ message: String) -> Data {
+        build(status: "500 Internal Server Error",
+              headers: [("Content-Type", "text/plain; charset=utf-8")],
+              body: Data(message.utf8))
+    }
+
     /// 101 WebSocket 升级响应
     static func switchingProtocols(accept: String) -> Data {
         build(status: "101 Switching Protocols",

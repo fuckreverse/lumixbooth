@@ -17,10 +17,14 @@ public struct BoothConfig: Codable, Sendable, Equatable {
     public var printing = PrintConf()
     public var server = ServerConf()
     public var security = SecurityConf()
+    public var sounds = SoundConf()
+    public var share = ShareConf()
+    public var guestbook = GuestbookConf()
 
     /// 向后兼容解码：旧 config.json 缺某段（如 security）时用默认值，不整体失败
     private enum TopLevelKeys: String, CodingKey {
         case camera, capture, vision, imaging, printing, server, security
+        case sounds, share, guestbook
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: TopLevelKeys.self)
@@ -31,6 +35,9 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         printing = try c.decodeIfPresent(PrintConf.self, forKey: .printing) ?? PrintConf()
         server = try c.decodeIfPresent(ServerConf.self, forKey: .server) ?? ServerConf()
         security = try c.decodeIfPresent(SecurityConf.self, forKey: .security) ?? SecurityConf()
+        sounds = try c.decodeIfPresent(SoundConf.self, forKey: .sounds) ?? SoundConf()
+        share = try c.decodeIfPresent(ShareConf.self, forKey: .share) ?? ShareConf()
+        guestbook = try c.decodeIfPresent(GuestbookConf.self, forKey: .guestbook) ?? GuestbookConf()
     }
 
     public init() {}
@@ -57,6 +64,8 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var idleSlideshow = true           // IDLE 吸引页轮播历史成片
         public var idleSlideshowSec = 6           // 轮播间隔（秒）
         public var idleCooldownAfterPrintSec = 0  // 打印完成回待机后自动 armed 冷却（秒；0=不冷却）
+        // ---- 省电模式（借鉴商业软件“idle 保护”）：待机 N 分钟调暗大屏/暂停轮播 ----
+        public var idleDimAfterMin = 10           // 0 = 不启用；>0 待机超过 N 分钟进入省电调暗
         public init() {}
 
         // 向后兼容解码：老配置缺新字段 → 默认值，不丢已有设置
@@ -64,7 +73,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             case countdownSec, defaultMode, reviewTimeoutSec, autoPrintOnTimeout
             case gestureTimeoutSec, armedTimeoutSec
             case continuousCollage, idleSlideshow, idleSlideshowSec
-            case idleCooldownAfterPrintSec
+            case idleCooldownAfterPrintSec, idleDimAfterMin
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -78,6 +87,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             idleSlideshow = try c.decodeIfPresent(Bool.self, forKey: .idleSlideshow) ?? true
             idleSlideshowSec = try c.decodeIfPresent(Int.self, forKey: .idleSlideshowSec) ?? 6
             idleCooldownAfterPrintSec = try c.decodeIfPresent(Int.self, forKey: .idleCooldownAfterPrintSec) ?? 0
+            idleDimAfterMin = try c.decodeIfPresent(Int.self, forKey: .idleDimAfterMin) ?? 10
         }
     }
 
@@ -103,6 +113,8 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         // ---- 新增（PhotoBoothProject 借鉴：拍后自选滤镜）----
         public var filterSelection = true         // REVIEW 态显示滤镜选择条
         public var defaultFilter = PhotoFilter.none // 拍摄流程默认滤镜（宾客可在 REVIEW 换）
+        // ---- GIF/Boomerang（借鉴商业软件）：连拍原图编 GIF，QR 指向动态图 ----
+        public var generateGIF = true              // 拼版模式下生成 boomerang.gif
         public init() {}
 
         // 向后兼容解码：老配置缺新字段 → 默认值
@@ -110,6 +122,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             case autoColor, skinSmoothing, skinStrength, replaceBackground
             case decorationTemplate
             case frame, themeName, dateWatermark, filterSelection, defaultFilter
+            case generateGIF
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -123,6 +136,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             dateWatermark = try c.decodeIfPresent(Bool.self, forKey: .dateWatermark) ?? true
             filterSelection = try c.decodeIfPresent(Bool.self, forKey: .filterSelection) ?? true
             defaultFilter = PhotoFilter.parse(try c.decodeIfPresent(String.self, forKey: .defaultFilter))
+            generateGIF = try c.decodeIfPresent(Bool.self, forKey: .generateGIF) ?? true
         }
     }
 
@@ -184,6 +198,45 @@ public struct BoothConfig: Codable, Sendable, Equatable {
     /// PIN 哈希存独立 guard.json（PINStore），一键重置配置不会把密码冲掉。
     public struct SecurityConf: Codable, Sendable, Equatable {
         public var quitProtection = true          // Cmd+Q / 关窗需 PIN 验证
+        // ---- /gallery 操作员重打口令（借鉴商业软件“操作员补打”）：验码通过才允许重打 ----
+        public var reprintCode = "1234"          // 口令（明文；重打是低风险操作，仅防宾客误触）
+        public init() {}
+
+        // 向后兼容解码：老配置缺 reprintCode 字段 → 默认值
+        private enum CodingKeys: String, CodingKey {
+            case quitProtection, reprintCode
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            quitProtection = try c.decodeIfPresent(Bool.self, forKey: .quitProtection) ?? true
+            reprintCode = try c.decodeIfPresent(String.self, forKey: .reprintCode) ?? "1234"
+        }
+    }
+
+    // MARK: - 提示音体系（借鉴商业软件：倒计时/快门/打印完成音）
+
+    public struct SoundConf: Codable, Sendable, Equatable {
+        public var enabled = true              // 总开关（活动现场静音用）
+        public var countdownBeep = true        // 倒计时哔声（每秒一哔，最后一秒高音）
+        public var shutterSound = true        // 快门音（进入 capturing 态）
+        public var printDoneSound = true       // 打印完成可声（printing→idle）
+        public var volume = 0.8               // 0.0-1.0
+        public init() {}
+    }
+
+    // MARK: - 分享与线索采集（邮箱采集：活动营销能力，借鉴 dslrBooth/LumaBooth）
+
+    public struct ShareConf: Codable, Sendable, Equatable {
+        public var emailCapture = true         // iPad REVIEW 页显示“邮箱接收电子版”输入框
+        public init() {}
+    }
+
+    // MARK: - 视频留言簿（婚礼场景：拍完照后录一段祝福视频）
+
+    public struct GuestbookConf: Codable, Sendable, Equatable {
+        public var enabled = false             // 需 Mac 有摄像头/麦克风，默认关
+        public var maxDurationSec = 15         // 单段上限（自动停止）
+        public var overlayText = "新婚快乐"       // 录制预览与回放页的文字 overlay
         public init() {}
     }
 }
@@ -223,6 +276,17 @@ extension BoothConfig {
         c.printing.paperHeightMM = c.printing.paperHeightMM.clamped(50...300)
         c.printing.dedupeWindowSec = c.printing.dedupeWindowSec.clamped(0...120)
         c.printing.printQuotaPerHour = c.printing.printQuotaPerHour.clamped(0...1000)
+        c.printing.autoPrintDelaySec = c.printing.autoPrintDelaySec.clamped(0...120)
+        c.printing.printingDwellSec = c.printing.printingDwellSec.clamped(0...60)
+        // 拍摄/省电
+        c.capture.idleSlideshowSec = c.capture.idleSlideshowSec.clamped(2...120)
+        c.capture.idleCooldownAfterPrintSec = c.capture.idleCooldownAfterPrintSec.clamped(0...600)
+        c.capture.idleDimAfterMin = c.capture.idleDimAfterMin.clamped(0...240)
+        // 提示音
+        c.sounds.volume = c.sounds.volume.clamped(0...1)
+        // 留言簿
+        c.guestbook.maxDurationSec = c.guestbook.maxDurationSec.clamped(5...120)
+        c.guestbook.overlayText = String(c.guestbook.overlayText.prefix(20))
         // 服务
         c.server.port = UInt16(min(max(Double(c.server.port), 0), 65_535))
         c.server.ipadMaxFPS = c.server.ipadMaxFPS.clamped(1...30)
@@ -250,7 +314,8 @@ extension BoothConfig {
         // 整体解码失败（某段字段类型损坏）→ 逐段解码，坏段用默认
         var cfg = BoothConfig()
         if let obj = try? JSONSerialization.jsonObject(with: merged) as? [String: Any] {
-            for section in ["camera", "capture", "vision", "imaging", "printing", "server", "security"] {
+            for section in ["camera", "capture", "vision", "imaging", "printing", "server", "security",
+                            "sounds", "share", "guestbook"] {
                 guard let sub = obj[section] else { continue }
                 guard let subData = try? JSONSerialization.data(withJSONObject: sub) else { continue }
                 switch section {
@@ -261,6 +326,9 @@ extension BoothConfig {
                 case "printing": if let s = try? dec.decode(PrintConf.self, from: subData) { cfg.printing = s }
                 case "server":   if let s = try? dec.decode(ServerConf.self, from: subData) { cfg.server = s }
                 case "security": if let s = try? dec.decode(SecurityConf.self, from: subData) { cfg.security = s }
+                case "sounds":   if let s = try? dec.decode(SoundConf.self, from: subData) { cfg.sounds = s }
+                case "share":    if let s = try? dec.decode(ShareConf.self, from: subData) { cfg.share = s }
+                case "guestbook": if let s = try? dec.decode(GuestbookConf.self, from: subData) { cfg.guestbook = s }
                 default: break
                 }
             }
