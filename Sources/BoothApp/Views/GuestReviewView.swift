@@ -2,7 +2,7 @@ import SwiftUI
 import BoothCore
 import BoothUI
 
-/// 成片确认页：大图 + 打印（默认份数）/ 重拍 + iPad 引导文案
+/// 成片确认页：大图 + 滤镜选择条（可选）+ 打印（默认份数）/ 重拍 + iPad 引导文案
 struct GuestReviewView: View {
     @Environment(\.boothTheme) private var theme
     let photo: ProcessedPhoto
@@ -14,17 +14,18 @@ struct GuestReviewView: View {
         ZStack {
             theme.backgroundColor.ignoresSafeArea()
 
-            VStack(spacing: 22) {
+            VStack(spacing: 18) {
                 Text("看看成片 🎉")
                     .font(theme.titleFont(40))
                     .foregroundStyle(theme.textColor)
 
-                // 成片大图（展示位图）
+                // 成片大图（展示位图；换滤镜后 photoId 变化自然重载）
                 ZStack {
                     if let image {
                         Image(nsImage: image)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
+                            .id(photo.id)   // 重打后新 id → 强制重建重读文件
                     } else {
                         Text("🖼️").font(.system(size: 80))
                     }
@@ -34,19 +35,57 @@ struct GuestReviewView: View {
                 .shadow(color: theme.textColor.opacity(0.12), radius: 20, y: 8)
                 .padding(.horizontal, 60)
 
+                // 拍后自选滤镜（配置关闭则不显示）
+                if vm.filterSelection {
+                    filterBar
+                }
+
                 Text("在 iPad 上确认打印，或点这里重拍")
                     .font(theme.bodyFont(20))
                     .foregroundStyle(theme.textSecondaryColor)
 
                 HStack(spacing: 24) {
                     BoothSecondaryButton("重拍", emoji: "🔄") { vm.retake() }
-                    BoothPrimaryButton("打印 \(vm.defaultCopies) 张", emoji: "🖨️") { vm.confirmPrint() }
+                    if vm.showPrintButton {
+                        BoothPrimaryButton("打印 \(vm.defaultCopies) 张", emoji: "🖨️") { vm.confirmPrint() }
+                    }
                 }
                 .padding(.bottom, 36)
             }
             .padding(.top, 24)
         }
-        .task { loadImage() }
+        .task(id: photo.id) { loadImage() }
+    }
+
+    /// 滤镜选择条：六档风格，当前高亮
+    private var filterBar: some View {
+        HStack(spacing: 12) {
+            ForEach(PhotoFilter.allCases, id: \.rawValue) { f in
+                filterChip(f)
+            }
+        }
+    }
+
+    private func filterChip(_ f: PhotoFilter) -> some View {
+        let selected = vm.currentFilter == f
+        return Button {
+            vm.selectFilter(f)
+        } label: {
+            Text("\(f.emoji) \(f.displayName)")
+                .font(theme.bodyFont(17, weight: .bold))
+                .foregroundStyle(selected ? theme.textColor : theme.textSecondaryColor)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .fill(selected ? theme.accentColor.opacity(0.22) : theme.backgroundSecondaryColor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .stroke(theme.accentColor, lineWidth: selected ? 3 : 0)
+                )
+        }
+        .buttonStyle(BoothBounceStyle())
     }
 
     /// 读展示位图（本地文件，小图直读即可）

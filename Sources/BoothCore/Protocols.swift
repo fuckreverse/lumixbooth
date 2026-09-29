@@ -55,6 +55,29 @@ public protocol PersonSegmenting: Sendable {
 /// 要求：任一步失败降级跳过不阻断；产物写入 sessionDir 并返回 ProcessedPhoto。
 public protocol ImagingServing: Sendable {
     func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL) async throws -> ProcessedPhoto
+    // 拍后重打 + QR 叠印：进协议本体才能动态派发到具体实现
+    //（只在 extension 里给默认实现时，any 存在类型调用永远命中默认 no-op）
+    func applyFilter(_ filter: PhotoFilter, to photo: ProcessedPhoto, sessionDir: URL) async throws -> ProcessedPhoto
+    func overlayQR(content: String, on photo: ProcessedPhoto) async throws -> ProcessedPhoto
+}
+
+// MARK: - 拍后重打默认实现（协议扩展：不实现者免费获得降级行为）
+
+public extension ImagingServing {
+
+    /// REVIEW 态换滤镜重打：基于 print-base.jpg（未滤镜未边框底图）重新生成
+    /// print.jpg / display.jpg，返回新 id 的 ProcessedPhoto（新 /photo/{id} 避免浏览器缓存）。
+    /// 不支持重打（无 baseFile）时返回原成片。
+    func applyFilter(_ filter: PhotoFilter, to photo: ProcessedPhoto, sessionDir: URL) async throws -> ProcessedPhoto {
+        photo
+    }
+
+    /// 打印前在成片右缘叠印 QR 码（指向 /photo/{id} 电子版下载），
+    /// 写 print-qr.jpg 并返回更新后的 ProcessedPhoto（id 不变，仅 printFile 换成带 QR 版）。
+    /// 不支持时返回原成片。
+    func overlayQR(content: String, on photo: ProcessedPhoto) async throws -> ProcessedPhoto {
+        photo
+    }
 }
 
 // MARK: - 打印（PrintKit 实现）
@@ -74,7 +97,10 @@ public protocol PrintServing: Sendable {
 /// 内嵌 HTTP/WebSocket 服务（SPEC §8）：
 ///  GET /        iPad 单页应用
 ///  GET /live    LiveView MJPEG
-///  GET /photo/{id}  成片下载（QR 指向）
+///  GET /photo/{id}  成片下载（QR 指向；也支持 /photo/{日期}/{会话名} 历史成片）
+///  GET /gallery     iPad 相册页（历史成片宫格）
+///  GET /slideshow   iPad 放映页（全屏自动轮播）
+///  GET /api/photos  历史成片 JSON 清单（gallery/slideshow 数据源）
 ///  WS  /ws      状态同步 + iPad 指令
 public protocol BoothWebServing: Sendable {
     var port: UInt16 { get }
@@ -94,4 +120,6 @@ public enum iPadCommand: Sendable, Equatable {
     case confirmPrint(copies: Int)
     case retake
     case selectMode(ShootMode)
+    /// REVIEW 态选择滤镜（拍后自选滤镜）
+    case selectFilter(PhotoFilter)
 }

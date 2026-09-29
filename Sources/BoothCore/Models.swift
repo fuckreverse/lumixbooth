@@ -49,12 +49,102 @@ public enum ShootKind: String, Sendable, Codable, Equatable {
     case collage  // 连拍 N 张拼 6 寸大头贴条
 }
 
+/// 拼版布局（借鉴 PhotoBoothProject 的多 collage 布局）
+public enum CollageLayout: String, Sendable, Codable, Equatable, CaseIterable {
+    case strip    // 经典大头贴条：N 格纵列
+    case grid2x2  // 2×2 四宫格
+    case duo      // 双格大图（上下两格）
+
+    /// 布局网格（列数 × 行数）；strip 行数随张数自适应
+    public var columns: Int {
+        switch self {
+        case .strip, .duo: return 1
+        case .grid2x2: return 2
+        }
+    }
+
+    /// 该布局的推荐拍摄张数
+    public var recommendedShots: Int {
+        switch self {
+        case .strip: return 4
+        case .grid2x2: return 4
+        case .duo: return 2
+        }
+    }
+
+    /// 中文显示名（UI 用）
+    public var displayName: String {
+        switch self {
+        case .strip: return "经典拼条"
+        case .grid2x2: return "四宫格"
+        case .duo: return "双格大图"
+        }
+    }
+}
+
 public struct ShootMode: Sendable, Codable, Equatable {
     public var kind: ShootKind
     public var shots: Int          // collage 用，single 恒为 1
-    public static let single = ShootMode(kind: .single, shots: 1)
-    public static func collage(_ shots: Int = 4) -> ShootMode { ShootMode(kind: .collage, shots: shots) }
-    public init(kind: ShootKind, shots: Int) { self.kind = kind; self.shots = shots }
+    public var layout: CollageLayout // collage 布局（single 忽略）
+    public static let single = ShootMode(kind: .single, shots: 1, layout: .strip)
+    public static func collage(_ shots: Int = 4, layout: CollageLayout = .strip) -> ShootMode {
+        ShootMode(kind: .collage, shots: shots, layout: layout)
+    }
+    public init(kind: ShootKind, shots: Int, layout: CollageLayout = .strip) {
+        self.kind = kind; self.shots = shots; self.layout = layout
+    }
+
+    // 自定义解码：旧配置/旧指令 JSON 没有 layout 字段时回退 .strip
+    private enum CodingKeys: String, CodingKey {
+        case kind, shots, layout
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(ShootKind.self, forKey: .kind)
+        shots = try c.decode(Int.self, forKey: .shots)
+        layout = try c.decodeIfPresent(CollageLayout.self, forKey: .layout) ?? .strip
+    }
+}
+
+/// 拍后自选滤镜（借鉴 PhotoBoothProject "Choose an image filter after taking a picture"）
+/// rawValue 是 iPad 指令 / 配置持久化用的英文 id，中文标签走 displayName
+public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
+    case none       // 原图（不做风格化）
+    case vivid      // 鲜艳
+    case warm       // 暖阳
+    case cool       // 冷调
+    case mono       // 黑白
+    case nostalgia  // 复古
+
+    /// 中文显示名（UI 用）
+    public var displayName: String {
+        switch self {
+        case .none: return "原图"
+        case .vivid: return "鲜艳"
+        case .warm: return "暖阳"
+        case .cool: return "冷调"
+        case .mono: return "黑白"
+        case .nostalgia: return "复古"
+        }
+    }
+
+    /// 滤镜图标 emoji（UI 用）
+    public var emoji: String {
+        switch self {
+        case .none: return "🖼️"
+        case .vivid: return "🌈"
+        case .warm: return "🌅"
+        case .cool: return "❄️"
+        case .mono: return "⚫️"
+        case .nostalgia: return "📻"
+        }
+    }
+
+    /// 未知字符串安全解析（iPad 指令/老配置容错）
+    public static func parse(_ raw: String?) -> PhotoFilter {
+        guard let raw else { return .none }
+        return PhotoFilter(rawValue: raw) ?? .none
+    }
 }
 
 /// 修图产物
@@ -63,8 +153,11 @@ public struct ProcessedPhoto: Sendable, Equatable {
     public var printFile: URL      // 1200×1800 @300dpi 打印位图
     public var displayFile: URL    // 长边 1600 展示位图（大屏/iPad/QR 下载）
     public var originals: [URL]    // 落盘原图
-    public init(id: UUID, printFile: URL, displayFile: URL, originals: [URL]) {
-        self.id = id; self.printFile = printFile; self.displayFile = displayFile; self.originals = originals
+    /// 未滤镜未边框的排版底图（print-base.jpg；拍后换滤镜重打用，nil = 不支持重打）
+    public var baseFile: URL?
+    public init(id: UUID, printFile: URL, displayFile: URL, originals: [URL], baseFile: URL? = nil) {
+        self.id = id; self.printFile = printFile; self.displayFile = displayFile
+        self.originals = originals; self.baseFile = baseFile
     }
 }
 

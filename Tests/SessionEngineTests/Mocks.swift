@@ -132,6 +132,8 @@ final class MockImaging: ImagingServing, @unchecked Sendable {
     private let lock = NSLock()
     private var _calls: [Call] = []
     private var _error: Error?
+    private var _filterCalls: [PhotoFilter] = []
+    private var _qrCalls: [String] = []
 
     /// 非 nil 时 process() 抛出该错误
     var error: Error? {
@@ -139,7 +141,14 @@ final class MockImaging: ImagingServing, @unchecked Sendable {
         set { lock.withLock { _error = newValue } }
     }
 
+    /// applyFilter 行为开关：true = 返回新 UUID 成片（模拟重打成功）
+    var applyFilterReturnsNewPhoto = true
+
     var calls: [Call] { lock.withLock { _calls } }
+    /// applyFilter 收到的滤镜序列
+    var filterCalls: [PhotoFilter] { lock.withLock { _filterCalls } }
+    /// overlayQR 收到的链接序列（QR 叠印路径验证用）
+    var qrCalls: [String] { lock.withLock { _qrCalls } }
 
     func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL) async throws -> ProcessedPhoto {
         lock.withLock { _calls.append(Call(originals: originals.count, mode: mode, sessionDir: sessionDir)) }
@@ -149,6 +158,27 @@ final class MockImaging: ImagingServing, @unchecked Sendable {
             printFile: sessionDir.appendingPathComponent("print.png"),
             displayFile: sessionDir.appendingPathComponent("display.jpg"),
             originals: originals.map { sessionDir.appendingPathComponent($0.fileName) })
+    }
+
+    func applyFilter(_ filter: PhotoFilter, to photo: ProcessedPhoto, sessionDir: URL) async throws -> ProcessedPhoto {
+        lock.withLock { _filterCalls.append(filter) }
+        guard applyFilterReturnsNewPhoto else { return photo }
+        return ProcessedPhoto(
+            id: UUID(),
+            printFile: sessionDir.appendingPathComponent("print-\(filter.rawValue).png"),
+            displayFile: sessionDir.appendingPathComponent("display-\(filter.rawValue).jpg"),
+            originals: photo.originals,
+            baseFile: photo.baseFile)
+    }
+
+    func overlayQR(content: String, on photo: ProcessedPhoto) async throws -> ProcessedPhoto {
+        lock.withLock { _qrCalls.append(content) }
+        return ProcessedPhoto(
+            id: photo.id,
+            printFile: photo.printFile.deletingLastPathComponent().appendingPathComponent("print-qr.png"),
+            displayFile: photo.displayFile,
+            originals: photo.originals,
+            baseFile: photo.baseFile)
     }
 }
 

@@ -1,9 +1,10 @@
 import Foundation
 
-/// 局域网地址工具：getifaddrs 枚举本机 IPv4（idle 页二维码用）
-enum LANAddress {
+/// 局域网地址工具：getifaddrs 枚举本机 IPv4。
+/// 放在 BoothCore：App 二维码与 SessionEngine 打印 QR 链接共用。
+public enum LANAddress {
     /// 本机局域网 IPv4 字符串：优先 en0（Wi-Fi），其次第一个非回环地址
-    static func localIPv4() -> String? {
+    public static func localIPv4() -> String? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { freeifaddrs(ifaddr) }

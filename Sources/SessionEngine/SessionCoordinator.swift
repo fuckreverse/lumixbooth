@@ -37,13 +37,15 @@ public actor SessionCoordinator {
     /// 当前拍摄模式（IDLE 页可选，begin() 时从配置加载默认值）
     public private(set) var mode: ShootMode = .collage(4)
     private var modeLoaded = false
+    /// 当前生效滤镜（拍后自选；流程启动时重置为配置默认值）
+    public private(set) var currentFilter: PhotoFilter = .none
 
-    // MARK: - 可调延迟（测试加速用，默认值按 SPEC）
+    // MARK: - 可调延迟（测试加速用；nil = 跟随配置）
 
     /// failure 态展示时长（SPEC：5s）
     public var failureDwell: TimeInterval = 5
-    /// printing 态完成后停留时长（"请取照片"提示）
-    public var printingDwell: TimeInterval = 3
+    /// printing 态完成后停留时长；nil = 用配置 printingDwellSec（原硬编码 3s）
+    public var printingDwell: TimeInterval?
 
     /// 调整停留时长（测试加速 / 运营微调用；actor 属性不允许外部直接赋值）
     public func setDwell(failure: TimeInterval? = nil, printing: TimeInterval? = nil) {
@@ -181,6 +183,32 @@ public actor SessionCoordinator {
         await confirmPrintInternal(copies: copies, reason: "用户确认打印")
     }
 
+    /// REVIEW 态换滤镜（拍后自选）：重打成片后回 REVIEW（新成片 id，iPad 端换图自然避缓存）
+    public func selectFilter(_ filter: PhotoFilter) async {
+        guard case .review(let photo) = state else {
+            Log.session.warn("当前态 \(describe(state)) 不允许换滤镜，已忽略")
+            return
+        }
+        guard filter != currentFilter else { return }   // 幂等
+        Log.session.info("REVIEW 换滤镜: \(currentFilter.rawValue) → \(filter.rawValue)")
+        let sessionDir = photo.printFile.deletingLastPathComponent()
+        do {
+            let newPhoto = try await imaging.applyFilter(filter, to: photo, sessionDir: sessionDir)
+            currentFilter = filter
+            if newPhoto.id != photo.id {
+                // 重打成功：注册新下载地址 + 重新广播 REVIEW（超时计时重置，宾客在活跃操作）
+                if let server { await server.publishPhoto(newPhoto) }
+                let cfg = await config.config
+                await enterReview(newPhoto, cfg: cfg)
+            } else {
+                // 无底图不支持重打（Mock/旧会话）：仅更新标记，成片保持
+                Log.session.warn("换滤镜重打不可用，保持当前成片")
+            }
+        } catch {
+            Log.session.warn("换滤镜失败，保持当前成片: \(describeError(error))")
+        }
+    }
+
     /// 取消：任意态回 idle 并清理全部在途任务
     public func cancel() async {
         Log.session.info("外部取消（当前态 \(describe(state))）")
@@ -299,22 +327,34 @@ public actor SessionCoordinator {
         let cfg = await config.config
         let shots = max(1, m.shots)
         var originals: [CameraCapture] = []
+        // 连拍不中断（PhotoBoothProject 借鉴）：拼版仅首张倒计时，后续张间短暂停顿立即连拍
+        let continuous = m.kind == .collage && cfg.capture.continuousCollage
+        currentFilter = cfg.imaging.defaultFilter
+        if continuous {
+            Log.session.info("连拍不中断模式：\(shots) 张，仅首张倒计时")
+        }
 
         for shot in 1...shots {
-            // 倒计时（countdownSec=0 跳过；collage 每张独立倒计时）
-            var n = max(0, cfg.capture.countdownSec)
-            while n > 0 {
-                await transition(.countdown(secondsLeft: n), reason: "第 \(shot)/\(shots) 张倒计时")
-                await bus.publish(.countdownTick(n))
-                Log.session.info("倒计时 tick=\(n)（第 \(shot)/\(shots) 张）")
-                do {
-                    try await Task.sleep(nanoseconds: 1_000_000_000)
-                } catch {
-                    return // 流程被取消（cancel / 相机断线）
+            if continuous && shot > 1 {
+                // 张间短停顿：给宾客摆下一个姿势的节奏，不停倒计时
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                if Task.isCancelled { return }
+            } else {
+                // 倒计时（countdownSec=0 跳过；collage 每张独立倒计时）
+                var n = max(0, cfg.capture.countdownSec)
+                while n > 0 {
+                    await transition(.countdown(secondsLeft: n), reason: "第 \(shot)/\(shots) 张倒计时")
+                    await bus.publish(.countdownTick(n))
+                    Log.session.info("倒计时 tick=\(n)（第 \(shot)/\(shots) 张）")
+                    do {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    } catch {
+                        return // 流程被取消（cancel / 相机断线）
+                    }
+                    n -= 1
                 }
-                n -= 1
+                if Task.isCancelled { return }
             }
-            if Task.isCancelled { return }
 
             await transition(.capturing(shot: shot, of: shots),
                              reason: shots > 1 ? "连拍第 \(shot)/\(shots) 张" : "快门")
@@ -361,7 +401,15 @@ public actor SessionCoordinator {
             try? await Task.sleep(nanoseconds: UInt64(sec * 1_000_000_000))
             guard !Task.isCancelled, case .review(let current) = state, current.id == photoID else { return }
             if cfg.capture.autoPrintOnTimeout {
-                Log.session.warn("REVIEW 超时（\(sec)s 无操作），自动打印 \(cfg.printing.defaultCopies) 份")
+                // 超时自动打印延迟（借鉴 PhotoBoothProject：给宾客最后反应时间）
+                let delay = Double(max(0, cfg.printing.autoPrintDelaySec))
+                if delay > 0 {
+                    Log.session.warn("REVIEW 超时（\(sec)s 无操作），\(delay)s 后自动打印 \(cfg.printing.defaultCopies) 份")
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard !Task.isCancelled, case .review(let still) = state, still.id == photoID else { return }
+                } else {
+                    Log.session.warn("REVIEW 超时（\(sec)s 无操作），自动打印 \(cfg.printing.defaultCopies) 份")
+                }
                 await confirmPrintInternal(copies: cfg.printing.defaultCopies, reason: "REVIEW 超时自动打印")
             } else {
                 Log.session.warn("REVIEW 超时（\(sec)s 无操作），回待机")
@@ -371,16 +419,28 @@ public actor SessionCoordinator {
     }
 
     private func confirmPrintInternal(copies: Int, reason: String) async {
-        guard case .review(let photo) = state else { return }
+        guard case .review(var photo) = state else { return }
         timeoutTask?.cancel(); timeoutTask = nil
         let cfg = await config.config
         let clamped = min(max(copies, cfg.printing.minCopies), cfg.printing.maxCopies)
         await transition(.printing(copies: clamped), reason: reason)
+        // 打印 QR 叠印（PhotoBoothProject 借鉴）：把电子版下载链接印到成片右缘
+        if cfg.printing.printQRCode, let server, server.port > 0 {
+            let host = LANAddress.localIPv4() ?? "127.0.0.1"
+            let content = "http://\(host):\(server.port)/photo/\(photo.id.uuidString)"
+            do {
+                photo = try await imaging.overlayQR(content: content, on: photo)
+            } catch {
+                Log.session.warn("QR 叠印失败，用原图打印: \(describeError(error))")
+            }
+        }
         let job = await printer.submit(image: photo.printFile, copies: clamped)
-        Log.session.info("打印任务已入队 \(job.id.uuidString.prefix(8)) copies=\(clamped)")
+        Log.session.info("打印任务已入队 \(job.id.uuidString.prefix(8)) copies=\(clamped) 路径=\(photo.printFile.lastPathComponent)")
         dwellTask?.cancel()
         dwellTask = Task {
-            try? await Task.sleep(nanoseconds: UInt64(max(0, printingDwell) * 1_000_000_000))
+            // “打印中请稍候”停留时长：测试覆盖优先，否则跟随配置（原硬编码 3s）
+            let dwell = printingDwell ?? Double(max(0, cfg.printing.printingDwellSec))
+            try? await Task.sleep(nanoseconds: UInt64(max(0, dwell) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await resetToIdle("打印完成，回待机")
         }
@@ -428,6 +488,8 @@ public actor SessionCoordinator {
                 await retake()
             case .selectMode(let m):
                 await setMode(m)
+            case .selectFilter(let filter):
+                await selectFilter(filter)
             }
         }
     }

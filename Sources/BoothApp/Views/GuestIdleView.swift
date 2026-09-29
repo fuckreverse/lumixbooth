@@ -2,7 +2,7 @@ import SwiftUI
 import BoothCore
 import BoothUI
 
-/// 待机吸引页：漂浮 emoji + 大标题 + 模式选择 + 相机状态胶囊 + iPad 二维码
+/// 待机吸引页：背景历史成片轮播 + 漂浮 emoji + 大标题 + 模式选择 + 相机状态胶囊 + iPad 二维码
 struct GuestIdleView: View {
     @Environment(\.boothTheme) private var theme
     @ObservedObject var composition: AppComposition
@@ -11,6 +11,12 @@ struct GuestIdleView: View {
     var body: some View {
         ZStack {
             theme.backgroundColor.ignoresSafeArea()
+
+            // 背景历史成片轮播（配置开启时；给路过的宾客看“现场能拍出什么”）
+            if vm.idleSlideshow {
+                IdleHistorySlideshow()
+            }
+
             FloatingEmojis()
 
             VStack(spacing: 30) {
@@ -98,6 +104,73 @@ struct GuestIdleView: View {
                 Text(composition.serverRunning ? "正在获取地址…" : "iPad 服务未启动")
                     .font(theme.bodyFont(15, weight: .bold))
                     .foregroundStyle(theme.textSecondaryColor)
+            }
+        }
+    }
+}
+
+/// IDLE 背景历史成片轮播：扫 sessions/ 目录，隔配置秒数淡入淡出切图
+/// （大屏吸引力用；淡到 12% 透明度不干扰前景内容，无历史则不显示）
+private struct IdleHistorySlideshow: View {
+    @Environment(\.boothTheme) private var theme
+    @State private var images: [NSImage] = []
+    @State private var index = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        ZStack {
+            if images.isEmpty {
+                Color.clear
+            } else if let img = images.indices.contains(index) ? images[index] : nil {
+                GeometryReader { geo in
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                }
+                .opacity(0.12)
+                .blur(radius: 1)
+            }
+        }
+        .allowsHitTesting(false)
+        .task {
+            loadImages()
+            startTimer()
+        }
+        .onDisappear { timer?.invalidate() }
+    }
+
+    /// 扫最近会话的 display.jpg（最多 12 张，够轮播不扫全盘）
+    private func loadImages() {
+        let fm = FileManager.default
+        let root = BoothPaths.sessionsDir
+        guard let days = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])
+            .filter({ (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }) else { return }
+        var urls: [URL] = []
+        for dayDir in days.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+            guard let sessions = try? fm.contentsOfDirectory(at: dayDir, includingPropertiesForKeys: [.isDirectoryKey])
+                .filter({ (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }) else { continue }
+            for s in sessions.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+                let display = s.appendingPathComponent("display.jpg")
+                if fm.fileExists(atPath: display.path) { urls.append(display) }
+                if urls.count >= 12 { break }
+            }
+            if urls.count >= 12 { break }
+        }
+        images = urls.compactMap { NSImage(contentsOf: $0) }
+        if images.count > 1 { images.shuffle() }   // 打乱避免总从最新一张开始
+        Log.ui.debug("IDLE 轮播加载 \(images.count) 张历史成片")
+    }
+
+    private func startTimer() {
+        Task { @MainActor in
+            let sec = await ConfigStore.shared.config.capture.idleSlideshowSec
+            let interval = Double(max(2, sec))
+            timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+                Task { @MainActor in
+                    if !images.isEmpty { index = (index + 1) % images.count }
+                }
             }
         }
     }

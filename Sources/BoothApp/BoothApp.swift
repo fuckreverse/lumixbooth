@@ -276,8 +276,8 @@ struct RootView: View {
         .background(theme.backgroundColor.ignoresSafeArea())
         .focusable()
         .focusEffectDisabled()
-        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，Esc=操作员页往返。
-        // 操作员页打开时空间/R 不触发拍摄（防宾客按 Esc 后空格还能隔着锁屏拍照）
+        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，P=打印（操作员），Esc=操作员页往返。
+        // 操作员页打开时空格/R 不触发拍摄（防宾客按 Esc 后空格还能隔着锁屏拍照）
         .onKeyPress(.space) {
             guard !composition.showingOperator else { return .handled }
             guestVM.triggerStart(); return .handled
@@ -290,6 +290,8 @@ struct RootView: View {
             guard !composition.showingOperator else { return .handled }
             guestVM.retake(); return .handled
         }
+        .onKeyPress(KeyEquivalent("p")) { handlePrintKey(); return .handled }
+        .onKeyPress(KeyEquivalent("P")) { handlePrintKey(); return .handled }
         .onKeyPress(.escape) { toggleOperatorPage(); return .handled }
         .task { guestVM.start() }
         // 进入操作员页：门禁拦截（放弃保护者自动放行）；返回宾客大屏：重新上锁
@@ -313,6 +315,13 @@ struct RootView: View {
             composition.showingOperator = true
             Log.ui.info("进入操作员页")
         }
+    }
+
+    /// P 键打印（PhotoBoothProject 借鉴）：操作员兜底打印通道，配置可关
+    private func handlePrintKey() {
+        guard guestVM.printKeyEnabled else { return }
+        Log.ui.info("P 键触发打印")
+        guestVM.confirmPrint()
     }
 }
 

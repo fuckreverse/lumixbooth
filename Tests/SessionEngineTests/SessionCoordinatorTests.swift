@@ -526,4 +526,158 @@ final class SessionCoordinatorTests: XCTestCase {
         await coord.cancel()
         await expect("cancel 后应回 idle") { await coord.state == .idle }
     }
+
+    // MARK: - 拍后自选滤镜（PhotoBoothProject 借鉴）
+
+    /// REVIEW 态换滤镜：重打成片（新 id）→ 重新广播 REVIEW + 注册新下载地址
+    func testSelectFilterReprintsAndRebroadcasts() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        let reached = await driveToReview(coord)
+        XCTAssertTrue(reached, "应进入 review")
+        let firstID: UUID
+        if case .review(let p) = await coord.state { firstID = p.id } else { return XCTFail("非 review 态") }
+
+        await coord.selectFilter(.vivid)
+        await expect("换滤镜后应回到 review（新成片）") {
+            if case .review(let p) = await coord.state { return p.id != firstID }
+            return false
+        }
+        XCTAssertEqual(imaging.filterCalls, [.vivid], "应恰好调用一次 applyFilter(vivid)")
+        XCTAssertEqual(server.publishedPhotos.count, 2, "原片 + 重打片都应注册下载")
+
+        // 幂等：重复选同一滤镜不应再重打
+        await coord.selectFilter(.vivid)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(imaging.filterCalls, [.vivid], "重复选择应被忽略")
+
+        let filterNow = await coord.currentFilter
+        XCTAssertEqual(filterNow, .vivid)
+        await coord.cancel()
+    }
+
+    /// 非 REVIEW 态换滤镜应被忽略
+    func testSelectFilterIgnoredOutsideReview() async {
+        let coord = makeSUT()
+        await coord.begin()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await coord.selectFilter(.vivid)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(imaging.filterCalls.isEmpty, "非 review 态不应触发重打")
+        await coord.cancel()
+    }
+
+    // MARK: - 连拍不中断（拼版仅首张倒计时）
+
+    func testContinuousCollageOnlyFirstCountdown() async {
+        await configure { c in
+            c.capture.countdownSec = 2
+            c.capture.defaultMode = .collage(4)
+            c.capture.continuousCollage = true
+            c.capture.reviewTimeoutSec = 60
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应完成 4 张连拍进入 review") { isReview(await coord.state) }
+        await settle()
+
+        // 倒计时按“轮”计数：countdownSec=2 首轮有 2 个 tick 状态，
+        // 只有从非倒计时态进入倒计时才算新一轮
+        var countdownRounds = 0
+        var prev: BoothState?
+        for s in recorder.states {
+            if case .countdown = s, !(prev.map { if case .countdown = $0 { return true }; return false } ?? false) {
+                countdownRounds += 1
+            }
+            prev = s
+        }
+        XCTAssertEqual(countdownRounds, 1, "连拍不中断模式仅首张倒计时，实际倒计时轮数: \(countdownRounds)")
+        let capturingCount = recorder.states.filter { s -> Bool in
+            if case .capturing = s { return true }
+            return false
+        }.count
+        XCTAssertEqual(capturingCount, 4, "4 张都应拍摄")
+        await coord.cancel()
+    }
+
+    // MARK: - QR 叠印打印流
+
+    /// printQRCode=true（默认）：打印前把 /photo/{id} 下载链接叠印到成片
+    func testPrintQRCodeStampsOverlay() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+            c.printing.printingDwellSec = 0
+        }
+        let coord = makeSUT()
+        await driveToReview(coord)
+        await coord.confirmPrint(copies: 1)
+        await expect("打印后应回 idle") { await coord.state == .idle }
+
+        XCTAssertEqual(imaging.qrCalls.count, 1, "应叠印一次 QR")
+        let content = imaging.qrCalls.first ?? ""
+        XCTAssertTrue(content.contains("/photo/"), "QR 内容应为成片下载链接: \(content)")
+        XCTAssertEqual((printer.submitted.first?.imagePath as NSString?).map { $0.lastPathComponent },
+                       "print-qr.png", "打印应使用叠印后的成片")
+
+        // 关闭开关：第二轮不应再叠印
+        await configure { c in c.printing.printQRCode = false }
+        await coord.start()
+        await expect("第二轮应进入 review") { isReview(await coord.state) }
+        await coord.confirmPrint(copies: 1)
+        await expect("第二轮打印后应回 idle") { await coord.state == .idle }
+        XCTAssertEqual(imaging.qrCalls.count, 1, "关闭开关后不应叠印")
+        XCTAssertEqual((printer.submitted.last?.imagePath as NSString?).map { $0.lastPathComponent },
+                       "print.png", "关闭开关时应打印原图")
+    }
+
+    // MARK: - 打印时序配置化
+
+    /// autoPrintDelaySec：REVIEW 超时后延迟 N 秒才自动打印
+    func testAutoPrintDelaySecDelaysPrint() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 1
+            c.capture.autoPrintOnTimeout = true
+            c.printing.autoPrintDelaySec = 3
+            c.printing.printingDwellSec = 0
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应进入 review") { isReview(await coord.state) }
+
+        // 1s 超时 + 3s 延迟：2s 时应还在 review（打印发生在 ~4s）
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        let stillReview = await isReview(coord.state)
+        XCTAssertTrue(stillReview, "延迟窗口内不应开始打印")
+        XCTAssertEqual(printer.submitted.count, 0, "延迟窗口内不应提交打印")
+
+        await expect("延迟过后应自动打印并回 idle", timeout: 8) { await coord.state == .idle }
+        XCTAssertEqual(printer.submitted.count, 1)
+    }
+
+    /// printingDwellSec：打印完成停留时长跟随配置（非硬编码 3s）
+    func testPrintingDwellFollowsConfig() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+            c.printing.printingDwellSec = 1
+        }
+        let coord = makeSUT()
+        await driveToReview(coord)
+        let startedAt = Date()
+        await coord.confirmPrint(copies: 1)
+        await expect("dwell=1s 时应快速回 idle", timeout: 5) { await coord.state == .idle }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        XCTAssertLessThan(elapsed, 3.0, "printingDwellSec=1 时回 idle 应明显早于硬编码 3s，实际 \(elapsed)s")
+    }
 }

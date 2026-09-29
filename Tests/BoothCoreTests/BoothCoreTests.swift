@@ -29,4 +29,93 @@ final class BoothCoreTests: XCTestCase {
         Log.core.info("单测日志写入")
         XCTAssertTrue(FileManager.default.fileExists(atPath: LogStore.shared.currentLogFile.path))
     }
+
+    // MARK: - 新契约（PhotoBoothProject 借鉴）
+
+    func testCollageLayoutMetadata() {
+        XCTAssertEqual(CollageLayout.strip.columns, 1)
+        XCTAssertEqual(CollageLayout.grid2x2.columns, 2)
+        XCTAssertEqual(CollageLayout.duo.columns, 1)
+        XCTAssertEqual(CollageLayout.strip.recommendedShots, 4)
+        XCTAssertEqual(CollageLayout.grid2x2.recommendedShots, 4)
+        XCTAssertEqual(CollageLayout.duo.recommendedShots, 2)
+        XCTAssertEqual(CollageLayout.allCases.count, 3)
+    }
+
+    func testPhotoFilterParse() {
+        XCTAssertEqual(PhotoFilter.parse("vivid"), .vivid)
+        XCTAssertEqual(PhotoFilter.parse("warm"), .warm)
+        XCTAssertEqual(PhotoFilter.parse(nil), .none)
+        XCTAssertEqual(PhotoFilter.parse(""), .none)
+        XCTAssertEqual(PhotoFilter.parse("no-such-filter"), .none, "非法值应安全回退 .none")
+        XCTAssertEqual(PhotoFilter.allCases.count, 6)
+    }
+
+    /// 旧版 config.json（v1 无任何新字段）：解码全部走默认值不崩
+    func testLegacyConfigJSONDecodesWithDefaults() throws {
+        // 一份旧 schema 的配置（只有最早版本就有的字段）
+        let legacy = """
+        {
+          "capture": {
+            "countdownSec": 5,
+            "defaultMode": { "kind": "collage", "shots": 4 },
+            "reviewTimeoutSec": 30,
+            "autoPrintOnTimeout": true
+          },
+          "vision": { "gestureEnabled": true, "poseReadinessEnabled": true, "gestureHitFrames": 3,
+                      "readyFrames": 5, "minFaceAreaRatio": 0.01, "detectEveryNFrames": 3 },
+          "imaging": {
+            "autoColor": true, "skinSmoothing": true, "replaceBackground": false,
+            "frame": true, "dateWatermark": true, "themeName": "party"
+          },
+          "printing": {
+            "printerName": "", "defaultCopies": 2, "minCopies": 1, "maxCopies": 4,
+            "paperWidthMM": 101.6, "paperHeightMM": 152.4, "borderless": true, "dedupeWindowSec": 5
+          },
+          "server": { "enabled": true, "port": 8080, "liveViewToIpad": true, "ipadMaxFPS": 10 },
+          "camera": { "dylibPath": "", "captureTimeoutSec": 10, "captureRetry": 1,
+                      "reconnectBaseDelaySec": 1, "reconnectMaxDelaySec": 15, "liveViewBufferSize": 1048576 }
+        }
+        """
+        let cfg = try JSONDecoder().decode(BoothConfig.self, from: Data(legacy.utf8))
+        // 拍摄段新字段默认值
+        XCTAssertEqual(cfg.capture.continuousCollage, false)
+        XCTAssertEqual(cfg.capture.idleSlideshow, true)
+        XCTAssertEqual(cfg.capture.idleSlideshowSec, 6)
+        XCTAssertEqual(cfg.capture.defaultMode.layout, .strip, "旧 mode 无 layout 应回退 strip")
+        // 修图段新字段默认值
+        XCTAssertEqual(cfg.imaging.filterSelection, true)
+        XCTAssertEqual(cfg.imaging.defaultFilter, .none)
+        // 打印段新字段默认值
+        XCTAssertEqual(cfg.printing.printQRCode, true)
+        XCTAssertEqual(cfg.printing.autoPrintDelaySec, 0)
+        XCTAssertEqual(cfg.printing.printingDwellSec, 3)
+        XCTAssertEqual(cfg.printing.printKeyEnabled, true)
+        XCTAssertEqual(cfg.printing.showPrintButton, true)
+        // 旧字段读取正常
+        XCTAssertEqual(cfg.capture.countdownSec, 5)
+        XCTAssertEqual(cfg.imaging.themeName, "party")
+        XCTAssertEqual(cfg.printing.defaultCopies, 2)
+    }
+
+    /// 新字段显式编码：round-trip 保持
+    func testNewConfigFieldsRoundTrip() throws {
+        var cfg = BoothConfig()
+        cfg.capture.continuousCollage = true
+        cfg.capture.idleSlideshowSec = 10
+        cfg.capture.defaultMode = .collage(4, layout: .grid2x2)
+        cfg.imaging.filterSelection = false
+        cfg.imaging.defaultFilter = .nostalgia
+        cfg.printing.printQRCode = false
+        cfg.printing.autoPrintDelaySec = 5
+        cfg.printing.printingDwellSec = 8
+        cfg.printing.printKeyEnabled = false
+        cfg.printing.showPrintButton = false
+        let data = try JSONEncoder().encode(cfg)
+        let back = try JSONDecoder().decode(BoothConfig.self, from: data)
+        XCTAssertEqual(back, cfg)
+        XCTAssertEqual(back.capture.defaultMode.layout, .grid2x2)
+        XCTAssertEqual(back.imaging.defaultFilter, .nostalgia)
+        XCTAssertEqual(back.printing.printingDwellSec, 8)
+    }
 }

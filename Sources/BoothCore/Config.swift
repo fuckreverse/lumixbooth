@@ -18,6 +18,21 @@ public struct BoothConfig: Codable, Sendable, Equatable {
     public var server = ServerConf()
     public var security = SecurityConf()
 
+    /// 向后兼容解码：旧 config.json 缺某段（如 security）时用默认值，不整体失败
+    private enum TopLevelKeys: String, CodingKey {
+        case camera, capture, vision, imaging, printing, server, security
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: TopLevelKeys.self)
+        camera = try c.decodeIfPresent(CameraConf.self, forKey: .camera) ?? CameraConf()
+        capture = try c.decodeIfPresent(CaptureConf.self, forKey: .capture) ?? CaptureConf()
+        vision = try c.decodeIfPresent(VisionConf.self, forKey: .vision) ?? VisionConf()
+        imaging = try c.decodeIfPresent(ImagingConf.self, forKey: .imaging) ?? ImagingConf()
+        printing = try c.decodeIfPresent(PrintConf.self, forKey: .printing) ?? PrintConf()
+        server = try c.decodeIfPresent(ServerConf.self, forKey: .server) ?? ServerConf()
+        security = try c.decodeIfPresent(SecurityConf.self, forKey: .security) ?? SecurityConf()
+    }
+
     public init() {}
 
     public struct CameraConf: Codable, Sendable, Equatable {
@@ -37,7 +52,30 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var autoPrintOnTimeout = true      // 超时自动打默认份数（false=只回待机）
         public var gestureTimeoutSec = 30         // GESTURE 态超时回 idle
         public var armedTimeoutSec = 10           // ARMED 态人离开超时
+        // ---- 新增（PhotoBoothProject 借鉴）----
+        public var continuousCollage = false      // 拼版连拍不中断：仅首张倒计时，后续立即拍（吞吐翻倍）
+        public var idleSlideshow = true           // IDLE 吸引页轮播历史成片
+        public var idleSlideshowSec = 6           // 轮播间隔（秒）
         public init() {}
+
+        // 向后兼容解码：老配置缺新字段 → 默认值，不丢已有设置
+        private enum CodingKeys: String, CodingKey {
+            case countdownSec, defaultMode, reviewTimeoutSec, autoPrintOnTimeout
+            case gestureTimeoutSec, armedTimeoutSec
+            case continuousCollage, idleSlideshow, idleSlideshowSec
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            countdownSec = try c.decodeIfPresent(Int.self, forKey: .countdownSec) ?? 3
+            defaultMode = try c.decodeIfPresent(ShootMode.self, forKey: .defaultMode) ?? .collage(4)
+            reviewTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .reviewTimeoutSec) ?? 60
+            autoPrintOnTimeout = try c.decodeIfPresent(Bool.self, forKey: .autoPrintOnTimeout) ?? true
+            gestureTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .gestureTimeoutSec) ?? 30
+            armedTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .armedTimeoutSec) ?? 10
+            continuousCollage = try c.decodeIfPresent(Bool.self, forKey: .continuousCollage) ?? false
+            idleSlideshow = try c.decodeIfPresent(Bool.self, forKey: .idleSlideshow) ?? true
+            idleSlideshowSec = try c.decodeIfPresent(Int.self, forKey: .idleSlideshowSec) ?? 6
+        }
     }
 
     public struct VisionConf: Codable, Sendable, Equatable {
@@ -58,7 +96,28 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var frame = true                   // 边框/水印
         public var themeName = "default"
         public var dateWatermark = true
+        // ---- 新增（PhotoBoothProject 借鉴：拍后自选滤镜）----
+        public var filterSelection = true         // REVIEW 态显示滤镜选择条
+        public var defaultFilter = PhotoFilter.none // 拍摄流程默认滤镜（宾客可在 REVIEW 换）
         public init() {}
+
+        // 向后兼容解码：老配置缺新字段 → 默认值
+        private enum CodingKeys: String, CodingKey {
+            case autoColor, skinSmoothing, skinStrength, replaceBackground
+            case frame, themeName, dateWatermark, filterSelection, defaultFilter
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            autoColor = try c.decodeIfPresent(Bool.self, forKey: .autoColor) ?? true
+            skinSmoothing = try c.decodeIfPresent(Bool.self, forKey: .skinSmoothing) ?? true
+            skinStrength = try c.decodeIfPresent(Int.self, forKey: .skinStrength) ?? 50
+            replaceBackground = try c.decodeIfPresent(Bool.self, forKey: .replaceBackground) ?? false
+            frame = try c.decodeIfPresent(Bool.self, forKey: .frame) ?? true
+            themeName = try c.decodeIfPresent(String.self, forKey: .themeName) ?? "default"
+            dateWatermark = try c.decodeIfPresent(Bool.self, forKey: .dateWatermark) ?? true
+            filterSelection = try c.decodeIfPresent(Bool.self, forKey: .filterSelection) ?? true
+            defaultFilter = PhotoFilter.parse(try c.decodeIfPresent(String.self, forKey: .defaultFilter))
+        }
     }
 
     public struct PrintConf: Codable, Sendable, Equatable {
@@ -71,7 +130,37 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var borderless = true
         public var dedupeWindowSec = 5            // 同一成片防连点窗口
         public var printQuotaPerHour = 0          // 每小时打印张数上限，0 = 不限制（防脚本刷打印）
+        // ---- 新增（借鉴 PhotoBoothProject 打印设置粒度）----
+        public var printQRCode = true             // 成片右缘印 QR 码（扫码下载电子版）
+        public var autoPrintDelaySec = 0          // REVIEW 超时自动打印前的延迟（给宾客最后反应时间）
+        public var printingDwellSec = 3           // “打印中请稍候”提示停留时长（原硬编码 3s）
+        public var printKeyEnabled = true         // 键盘 P 在 REVIEW 态触发打印（兜底）
+        public var showPrintButton = true         // iPad REVIEW 页显示打印按钮（false=仅供 QR/重拍，操作员管控）
         public init() {}
+
+        // 向后兼容解码：老配置缺新字段 → 默认值
+        private enum CodingKeys: String, CodingKey {
+            case printerName, defaultCopies, minCopies, maxCopies
+            case paperWidthMM, paperHeightMM, borderless, dedupeWindowSec, printQuotaPerHour
+            case printQRCode, autoPrintDelaySec, printingDwellSec, printKeyEnabled, showPrintButton
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            printerName = try c.decodeIfPresent(String.self, forKey: .printerName) ?? ""
+            defaultCopies = try c.decodeIfPresent(Int.self, forKey: .defaultCopies) ?? 2
+            minCopies = try c.decodeIfPresent(Int.self, forKey: .minCopies) ?? 1
+            maxCopies = try c.decodeIfPresent(Int.self, forKey: .maxCopies) ?? 4
+            paperWidthMM = try c.decodeIfPresent(Double.self, forKey: .paperWidthMM) ?? 101.6
+            paperHeightMM = try c.decodeIfPresent(Double.self, forKey: .paperHeightMM) ?? 152.4
+            borderless = try c.decodeIfPresent(Bool.self, forKey: .borderless) ?? true
+            dedupeWindowSec = try c.decodeIfPresent(Int.self, forKey: .dedupeWindowSec) ?? 5
+            printQuotaPerHour = try c.decodeIfPresent(Int.self, forKey: .printQuotaPerHour) ?? 0
+            printQRCode = try c.decodeIfPresent(Bool.self, forKey: .printQRCode) ?? true
+            autoPrintDelaySec = try c.decodeIfPresent(Int.self, forKey: .autoPrintDelaySec) ?? 0
+            printingDwellSec = try c.decodeIfPresent(Int.self, forKey: .printingDwellSec) ?? 3
+            printKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .printKeyEnabled) ?? true
+            showPrintButton = try c.decodeIfPresent(Bool.self, forKey: .showPrintButton) ?? true
+        }
     }
 
     public struct ServerConf: Codable, Sendable, Equatable {

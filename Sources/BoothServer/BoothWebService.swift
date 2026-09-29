@@ -7,10 +7,14 @@ import BoothCore
 // Network.framework 手写实现，零第三方依赖。
 //
 // 路由：
-//   GET /            iPad 单页应用（WebAssets.indexHTML）
-//   GET /live        LiveView MJPEG 流（multipart/x-mixed-replace; boundary=booth）
-//   GET /photo/{id}  成片下载（QR 码指向），publishPhoto 注册后可取
-//   GET /ws          WebSocket（Upgrade 握手）：状态下行 + iPad 指令上行
+//   GET /                     iPad 单页应用（WebAssets.indexHTML）
+//   GET /live                 LiveView MJPEG 流（multipart/x-mixed-replace; boundary=booth）
+//   GET /photo/{id}           成片下载（QR 码指向），publishPhoto 注册后可取
+//   GET /photo/history/{date}/{session}  历史成片（gallery/slideshow 用）
+//   GET /api/photos           最近成片列表 JSON（gallery/slideshow 拉取）
+//   GET /gallery              iPad 独立相册页
+//   GET /slideshow            iPad 独立放映页
+//   GET /ws                   WebSocket（Upgrade 握手）：状态下行 + iPad 指令上行
 //
 // 并发模型（Swift 6 严格并发）：
 //   - 本类型是 actor：所有连接的收包解析、路由、广播都在 actor 内串行执行
@@ -138,6 +142,9 @@ public actor BoothWebService: BoothWebServing {
     private var lastState: BoothState?
     /// MJPEG 帧率封顶用的时间戳
     private var lastLivePush: Date?
+    /// 历史成片列表缓存（访问 /api/photos 时刷新；避免每次扫盘）
+    private var historyCache: [HistoryPhoto]?
+    private var historyCacheAt: Date?
 
     public init(conf: BoothConfig = BoothConfig()) {
         self.conf = conf
@@ -362,8 +369,25 @@ public actor BoothWebService: BoothWebServing {
             send(conn, HTTPResponse.liveStreamHead())
             Log.server.info("MJPEG 取景流开始（\(conn.endpointDescription)）")
 
+        case ("GET", "/gallery"):
+            // iPad 独立相册页（浏览 / 下载历史成片）
+            send(conn, HTTPResponse.ok(contentType: "text/html; charset=utf-8",
+                                       body: Data(WebAssets.galleryHTML.utf8)), thenCancel: true)
+
+        case ("GET", "/slideshow"):
+            // iPad 独立放映页（全屏轮播历史成片，秒间隔跟随配置）
+            let html = WebAssets.slideshowHTML(intervalSec: max(2, conf.capture.idleSlideshowSec))
+            send(conn, HTTPResponse.ok(contentType: "text/html; charset=utf-8",
+                                       body: Data(html.utf8)), thenCancel: true)
+
+        case ("GET", "/api/photos"):
+            serveHistoryList(conn)
+
         case ("GET", "/ws"):
             upgradeWebSocket(conn, session, req)
+
+        case ("GET", let p) where p.hasPrefix("/photo/history/"):
+            serveHistoryPhoto(conn, String(p.dropFirst("/photo/history/".count)))
 
         case ("GET", let p) where p.hasPrefix("/photo/"):
             servePhoto(conn, String(p.dropFirst("/photo/".count)))
@@ -388,6 +412,84 @@ public actor BoothWebService: BoothWebServing {
             Log.server.info("提供照片 \(id)（\(data.count) 字节）")
         } catch {
             Log.server.error("读取照片文件失败 \(url.path): \(error)")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+        }
+    }
+
+    // MARK: - 历史成片（gallery / slideshow）
+
+    /// 历史成片条目：只描述磁盘目录，不占内存位图
+    struct HistoryPhoto: Sendable {
+        let date: String      // yyyy-MM-dd
+        let session: String   // HHmmss-短id
+        var url: String { "/photo/history/\(date)/\(session)" }
+    }
+
+    /// 扫描 sessions/ 目录找最近有成片的会话（按目录名即时间排序，新→旧）
+    private func listHistoryPhotos(limit: Int = 50) -> [HistoryPhoto] {
+        if let cache = historyCache, let at = historyCacheAt,
+           Date().timeIntervalSince(at) < 30 {
+            return Array(cache.prefix(limit))
+        }
+        let fm = FileManager.default
+        let sessionsRoot = BoothPaths.sessionsDir
+        guard let days = try? fm.contentsOfDirectory(at: sessionsRoot, includingPropertiesForKeys: [.isDirectoryKey])
+            .filter({ (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }) else {
+            historyCache = []; historyCacheAt = Date()
+            return []
+        }
+        var result: [HistoryPhoto] = []
+        // 日目录名即 yyyy-MM-dd，倒序即时间新→旧
+        for dayDir in days.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+            let day = dayDir.lastPathComponent
+            guard let sessions = try? fm.contentsOfDirectory(at: dayDir, includingPropertiesForKeys: [.isDirectoryKey])
+                .filter({ (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }) else { continue }
+            for sessionDir in sessions.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+                // 有 display.jpg 才算有效会话（成片落盘过）
+                guard fm.fileExists(atPath: sessionDir.appendingPathComponent("display.jpg").path) else { continue }
+                result.append(HistoryPhoto(date: day, session: sessionDir.lastPathComponent))
+                if result.count >= limit { break }
+            }
+            if result.count >= limit { break }
+        }
+        historyCache = result
+        historyCacheAt = Date()
+        Log.server.info("历史成片扫描：\(result.count) 个会话（根 \(sessionsRoot.path)）")
+        return result
+    }
+
+    /// GET /api/photos：[{url, date, session}, ...]
+    private func serveHistoryList(_ conn: NWConnection) {
+        let items = listHistoryPhotos(limit: 50).map { photo -> [String: String] in
+            ["url": photo.url, "date": photo.date, "session": photo.session]
+        }
+        let obj: [String: Any] = ["photos": items]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else {
+            send(conn, HTTPResponse.ok(contentType: "application/json", body: Data("{\"photos\":[]}".utf8)), thenCancel: true)
+            return
+        }
+        send(conn, HTTPResponse.ok(contentType: "application/json", body: data), thenCancel: true)
+    }
+
+    /// GET /photo/history/{date}/{session}：直接从磁盘读 display.jpg（30s 缓存之外也不依赖注册表）
+    private func serveHistoryPhoto(_ conn: NWConnection, _ rawPath: String) {
+        // 严格校验路径段格式，防目录穿越（只允许 日期/会话名 两段）
+        let parts = rawPath.split(separator: "/").map(String.init)
+        guard parts.count == 2,
+              parts[0].range(of: "^\\d{4}-\\d{2}-\\d{2}$", options: .regularExpression) != nil,
+              parts[1].range(of: "^[0-9a-zA-Z-]+$", options: .regularExpression) != nil else {
+            Log.server.warn("历史成片路径非法: \(rawPath) → 404")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+            return
+        }
+        let url = BoothPaths.sessionsDir.appendingPathComponent(parts[0], isDirectory: true)
+            .appendingPathComponent(parts[1], isDirectory: true)
+            .appendingPathComponent("display.jpg")
+        do {
+            let data = try Data(contentsOf: url)
+            send(conn, HTTPResponse.ok(contentType: "image/jpeg", body: data), thenCancel: true)
+            Log.server.info("提供历史成片 \(parts[0])/\(parts[1])（\(data.count) 字节）")
+        } catch {
             send(conn, HTTPResponse.notFound(), thenCancel: true)
         }
     }
@@ -529,11 +631,19 @@ public actor BoothWebService: BoothWebServing {
                 commandHub.yield(.selectMode(.single))
             case "collage":
                 let shots = obj["shots"] as? Int ?? conf.capture.defaultMode.shots
-                Log.server.info("iPad 指令: 选择拼版模式（\(shots) 张）")
-                commandHub.yield(.selectMode(.collage(shots)))
+                let layout = CollageLayout(rawValue: (obj["layout"] as? String) ?? "")
+                    ?? conf.capture.defaultMode.layout
+                Log.server.info("iPad 指令: 选择拼版模式（\(shots) 张，\(layout.rawValue)）")
+                commandHub.yield(.selectMode(.collage(shots, layout: layout)))
             default:
                 Log.server.warn("mode 指令 kind 非法: \(obj["kind"] ?? "nil")")
             }
+
+        case "filter":
+            // REVIEW 态换滤镜（拍后自选）：{"type":"filter","filter":"vivid"}
+            let filter = PhotoFilter.parse(obj["filter"] as? String)
+            Log.server.info("iPad 指令: 选择滤镜 \(filter.rawValue)")
+            commandHub.yield(.selectFilter(filter))
 
         default:
             Log.server.warn("未知指令类型: \(obj["type"] ?? "nil")，忽略")
@@ -565,6 +675,11 @@ public actor BoothWebService: BoothWebServing {
             obj["state"] = "review"
             obj["photoId"] = photo.id.uuidString
             obj["copies"] = conf.printing.defaultCopies   // iPad 步进器默认份数
+            // 打印按钮可见性 / 滤镜选择条开关（PhotoBoothProject 借鉴）
+            obj["showPrint"] = conf.printing.showPrintButton
+            if conf.imaging.filterSelection {
+                obj["filters"] = PhotoFilter.allCases.map { ["id": $0.rawValue, "name": $0.displayName] }
+            }
         case .printing(let copies):
             obj["state"] = "printing"
             obj["copies"] = copies

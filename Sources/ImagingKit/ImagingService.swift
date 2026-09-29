@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import CoreImage
 import Foundation
@@ -6,13 +7,18 @@ import BoothCore
 // ============================================================
 // ImagingService — 修图合成管线（SPEC §6，契约见 Protocols.swift）
 //
-// 管线：解码定向 → 自动调色 → 美肤 → 换背景 → 排版（单张/拼版）
-//       → 边框/水印 → 打印位图 + 展示位图 + 原图落盘
+// 管线：解码定向 → 自动调色 → 美肤 → 换背景 → 排版（单张/多布局拼版）
+//       → 风格化滤镜 → 边框/水印 → 打印位图 + 展示位图 + 原图落盘
+//
+// 拍后重打（PhotoBoothProject 借鉴）：
+//  - process 会额外落盘 print-base.jpg（未滤镜未边框的排版底图）
+//  - applyFilter 基于 base 重打：换滤镜 → 重新叠边框/水印 → 覆写 print/display
+//  - overlayQR 打印前把 /photo/{id} 下载链接印到成片右缘
 //
 // 设计要点：
 //  - 每步可独立开关（ConfigStore.shared 的 imaging 段驱动）
-//  - 任一步失败降级跳过不阻断，只记日志；只有"无输入 / 全部解码失败 /
-//    打印位图写盘失败"才抛错
+//  - 任一步失败降级跳过不阻断，只记日志；只有“无输入 / 全部解码失败 /
+//    打印位图写盘失败”才抛错
 //  - 换背景能力由外部注入 segmenter（App 层传 VisionKit 实现）；
 //    为 nil 且配置开启时降级跳过并记日志
 //  - 本类型是 struct、非 MainActor，async 入口自动跑在后台线程，
@@ -49,7 +55,7 @@ public struct ImagingService: ImagingServing {
 
     public func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL) async throws -> ProcessedPhoto {
         let pipelineStart = CFAbsoluteTimeGetCurrent()
-        Log.imaging.info("修图管线开始: 模式=\(mode.kind.rawValue) 输入=\(originals.count)张 目录=\(sessionDir.lastPathComponent)")
+        Log.imaging.info("修图管线开始: 模式=\(mode.kind.rawValue) 布局=\(mode.layout.rawValue) 输入=\(originals.count)张 目录=\(sessionDir.lastPathComponent)")
         guard !originals.isEmpty else {
             throw BoothError.imagingFailed("无输入原图")
         }
@@ -145,7 +151,7 @@ public struct ImagingService: ImagingServing {
             photos[i] = img
         }
 
-        // MARK: ⑤ 排版（单张裁切填充 / 拼版大头贴条）
+        // MARK: ⑤ 排版（单张裁切填充 / 多布局拼版）
         // 注意：边框叠加在排版之后执行 —— frame.png 是按最终 1200×1800 成片尺寸设计的
         let accent = PipelineCore.themeAccent(themeDir: themeDir)
         let layoutStart = CFAbsoluteTimeGetCurrent()
@@ -158,38 +164,31 @@ public struct ImagingService: ImagingServing {
             if photos.count < mode.shots {
                 Log.imaging.warn("拼版应收\(mode.shots)张实收\(photos.count)张，按实际张数排版")
             }
-            canvas = try PipelineCore.composeCollage(photos: photos, themeDir: themeDir, accent: accent, dateText: dateText)
-            Log.imaging.debug("排版 拼版\(photos.count)格大头贴条 \(elapsedMs(layoutStart))ms")
+            canvas = try PipelineCore.composeCollage(photos: photos, layout: mode.layout,
+                                                      themeDir: themeDir, accent: accent, dateText: dateText)
+            Log.imaging.debug("排版 拼版\(mode.layout.rawValue)\(photos.count)格 \(elapsedMs(layoutStart))ms")
         }
 
-        // MARK: ⑥ 边框 / 水印
-        if conf.frame {
-            let stepStart = CFAbsoluteTimeGetCurrent()
-            let frame = PipelineCore.loadCGImage(themeDir.appendingPathComponent("frame.png"))
-            if frame == nil {
-                Log.imaging.warn("主题[\(conf.themeName)]缺少 frame.png，边框降级跳过（仅水印）")
-            }
-            // 拼版模式品牌条已含日期，右下角水印只在单张模式绘制
-            canvas = try PipelineCore.overlayFrameAndWatermark(
-                on: canvas, frame: frame, dateText: dateText, accent: accent,
-                drawWatermark: conf.dateWatermark && mode.kind == .single
-            )
-            Log.imaging.debug("边框/水印 \(elapsedMs(stepStart))ms")
-        } else if conf.dateWatermark, mode.kind == .single {
-            // 边框关闭但水印开启时仍画水印
-            canvas = try PipelineCore.overlayFrameAndWatermark(
-                on: canvas, frame: nil, dateText: dateText, accent: accent, drawWatermark: true
-            )
+        // MARK: ⑤b 排版底图落盘（拍后换滤镜重打用；失败只降级重打能力，不阻断）
+        let baseURL = sessionDir.appendingPathComponent("print-base.jpg")
+        do {
+            try PipelineCore.writeJPEG(canvas, to: baseURL, quality: PipelineCore.printJPEGQuality, dpi: 300)
+        } catch {
+            Log.imaging.warn("排版底图落盘失败（拍后换滤镜将不可用）: \(error.localizedDescription)")
         }
 
-        // MARK: 输出 print.jpg + display.jpg
-        let outputStart = CFAbsoluteTimeGetCurrent()
-        let printURL = sessionDir.appendingPathComponent("print.jpg")
-        try PipelineCore.writeJPEG(canvas, to: printURL, quality: PipelineCore.printJPEGQuality, dpi: 300)
-        let displayURL = sessionDir.appendingPathComponent("display.jpg")
-        let display = try PipelineCore.scaledToLongEdge(canvas, PipelineCore.displayLongEdge)
-        try PipelineCore.writeJPEG(display, to: displayURL, quality: PipelineCore.displayJPEGQuality, dpi: nil)
-        Log.imaging.debug("输出 print.jpg/display.jpg \(elapsedMs(outputStart))ms")
+        // MARK: ⑤c 滤镜 + ⑥ 边框/水印 + 输出（与 applyFilter 共用 finalize）
+        // 拼版模式品牌条已含日期，右下角水印只在单张模式绘制
+        let drawWatermark = conf.dateWatermark && mode.kind == .single
+        let (printURL, displayURL) = try finalize(canvas: canvas,
+                                                  filter: conf.defaultFilter,
+                                                  conf: conf,
+                                                  themeDir: themeDir,
+                                                  accent: accent,
+                                                  dateText: dateText,
+                                                  sessionDir: sessionDir,
+                                                  drawWatermark: drawWatermark,
+                                                  ciContext: ciContext)
 
         // 性能预算检查（SPEC §6：单张 <3s，拼版 <6s）
         let totalMs = elapsedMs(pipelineStart)
@@ -199,7 +198,126 @@ public struct ImagingService: ImagingServing {
         }
         Log.imaging.info("修图管线完成: 总耗时 \(totalMs)ms，产物 \(printURL.lastPathComponent)")
 
-        return ProcessedPhoto(id: UUID(), printFile: printURL, displayFile: displayURL, originals: originalURLs)
+        let hasBase = FileManager.default.fileExists(atPath: baseURL.path)
+        return ProcessedPhoto(id: UUID(), printFile: printURL, displayFile: displayURL,
+                              originals: originalURLs, baseFile: hasBase ? baseURL : nil)
+    }
+
+    // MARK: - 拍后换滤镜重打（协议扩展的真实现）
+
+    public func applyFilter(_ filter: PhotoFilter, to photo: ProcessedPhoto, sessionDir: URL) async throws -> ProcessedPhoto {
+        let start = CFAbsoluteTimeGetCurrent()
+        guard let baseURL = photo.baseFile ?? fallbackBaseURL(for: photo) else {
+            // 无底图：不支持重打，原样返回（调用方保持当前成片）
+            Log.imaging.warn("换滤镜重打：无 print-base.jpg 底图，返回原成片")
+            return photo
+        }
+        guard let base = PipelineCore.loadCGImage(baseURL) else {
+            Log.imaging.warn("换滤镜重打：底图解码失败 \(baseURL.lastPathComponent)，返回原成片")
+            return photo
+        }
+        let conf = await resolveConf()
+        let themeDir = (themesDirOverride ?? BoothPaths.themesDir)
+            .appendingPathComponent(conf.themeName, isDirectory: true)
+        let accent = PipelineCore.themeAccent(themeDir: themeDir)
+        let dateText = Self.dateFormatter.string(from: Date())
+        // 水印判定沿用 process：多张原图 = 拼版（品牌条已含日期不画角标）
+        let drawWatermark = conf.dateWatermark && photo.originals.count <= 1
+        let ciContext = CIContext(options: [.cacheIntermediates: false])
+
+        let (printURL, displayURL) = try finalize(canvas: base,
+                                                  filter: filter,
+                                                  conf: conf,
+                                                  themeDir: themeDir,
+                                                  accent: accent,
+                                                  dateText: dateText,
+                                                  sessionDir: sessionDir,
+                                                  drawWatermark: drawWatermark,
+                                                  ciContext: ciContext)
+        Log.imaging.info("换滤镜重打完成: \(filter.rawValue) \(elapsedMs(start))ms → \(printURL.lastPathComponent)")
+        // 新 id：新 /photo/{id} 地址，iPad 端 <img> 换 src 天然避开浏览器缓存
+        return ProcessedPhoto(id: UUID(), printFile: printURL, displayFile: displayURL,
+                              originals: photo.originals, baseFile: baseURL)
+    }
+
+    // MARK: - 打印 QR 叠印（协议扩展的真实现）
+
+    public func overlayQR(content: String, on photo: ProcessedPhoto) async throws -> ProcessedPhoto {
+        let start = CFAbsoluteTimeGetCurrent()
+        guard let print = PipelineCore.loadCGImage(photo.printFile) else {
+            Log.imaging.warn("QR 叠印：打印位图读取失败 \(photo.printFile.lastPathComponent)，用原图打印")
+            return photo
+        }
+        let ciContext = CIContext(options: [.cacheIntermediates: false])
+        let stamped = try PipelineCore.overlayQRCode(on: print, content: content, ctx: ciContext)
+        let qrURL = photo.printFile.deletingLastPathComponent().appendingPathComponent("print-qr.jpg")
+        try PipelineCore.writeJPEG(stamped, to: qrURL, quality: PipelineCore.printJPEGQuality, dpi: 300)
+        Log.imaging.info("QR 叠印完成: \(content) \(elapsedMs(start))ms → \(qrURL.lastPathComponent)")
+        var updated = photo
+        updated.printFile = qrURL
+        return updated
+    }
+
+    // MARK: - 内部共用
+
+    /// 配置解析（覆盖优先）
+    private func resolveConf() async -> BoothConfig.ImagingConf {
+        if let configOverride { return configOverride }
+        return await ConfigStore.shared.config.imaging
+    }
+
+    /// 兼容旧会话目录：printFile 同目录下找 print-base.jpg
+    private func fallbackBaseURL(for photo: ProcessedPhoto) -> URL? {
+        let url = photo.printFile.deletingLastPathComponent().appendingPathComponent("print-base.jpg")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// 收尾共用路径：风格化滤镜 → 边框/水印 → 写 print.jpg + display.jpg
+    private func finalize(canvas: CGImage,
+                          filter: PhotoFilter,
+                          conf: BoothConfig.ImagingConf,
+                          themeDir: URL,
+                          accent: NSColor?,
+                          dateText: String,
+                          sessionDir: URL,
+                          drawWatermark: Bool,
+                          ciContext: CIContext) throws -> (print: URL, display: URL) {
+        var image = canvas
+        // 风格化滤镜（失败降级原图）
+        if filter != .none {
+            let stepStart = CFAbsoluteTimeGetCurrent()
+            do {
+                image = try PipelineCore.applyStyleFilter(image, filter: filter, ctx: ciContext)
+                Log.imaging.debug("滤镜 \(filter.rawValue) \(elapsedMs(stepStart))ms")
+            } catch {
+                Log.imaging.warn("滤镜 \(filter.rawValue) 失败降级原图: \(error.localizedDescription)")
+            }
+        }
+        // 边框 / 水印
+        if conf.frame {
+            let stepStart = CFAbsoluteTimeGetCurrent()
+            let frame = PipelineCore.loadCGImage(themeDir.appendingPathComponent("frame.png"))
+            if frame == nil {
+                Log.imaging.warn("主题[\(conf.themeName)]缺少 frame.png，边框降级跳过（仅水印）")
+            }
+            image = try PipelineCore.overlayFrameAndWatermark(
+                on: image, frame: frame, dateText: dateText, accent: accent,
+                drawWatermark: drawWatermark)
+            Log.imaging.debug("边框/水印 \(elapsedMs(stepStart))ms")
+        } else if drawWatermark {
+            // 边框关闭但水印开启时仍画水印
+            image = try PipelineCore.overlayFrameAndWatermark(
+                on: image, frame: nil, dateText: dateText, accent: accent, drawWatermark: true)
+        }
+        // 输出 print.jpg + display.jpg
+        let outputStart = CFAbsoluteTimeGetCurrent()
+        let printURL = sessionDir.appendingPathComponent("print.jpg")
+        try PipelineCore.writeJPEG(image, to: printURL, quality: PipelineCore.printJPEGQuality, dpi: 300)
+        let displayURL = sessionDir.appendingPathComponent("display.jpg")
+        let display = try PipelineCore.scaledToLongEdge(image, PipelineCore.displayLongEdge)
+        try PipelineCore.writeJPEG(display, to: displayURL, quality: PipelineCore.displayJPEGQuality, dpi: nil)
+        Log.imaging.debug("输出 print.jpg/display.jpg \(elapsedMs(outputStart))ms")
+        return (printURL, displayURL)
     }
 
     /// 毫秒耗时
