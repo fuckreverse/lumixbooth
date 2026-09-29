@@ -61,7 +61,7 @@ final class LmxLibraryTests: XCTestCase {
         // 查找顺序：配置路径必须排在最前，bundle 资源/开发兜底随后
         let candidates = LmxLibrary.candidatePaths(configuredPath: "/nonexistent/x.dylib")
         XCTAssertEqual(candidates.first, "/nonexistent/x.dylib")
-        XCTAssertTrue(candidates.contains("/Users/liqiang/src/booth/lib/libLmxptpif.dylib"))
+        XCTAssertTrue(candidates.contains("/Users/liqiang/src/booth/Sources/CameraKit/libLmxptpif.dylib"))
         // 本机兜底存在时 load 能成功（这也是开发机的预期路径）
         if candidates.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
             XCTAssertNoThrow(try LmxLibrary.load(configuredPath: ""))

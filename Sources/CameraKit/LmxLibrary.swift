@@ -159,8 +159,8 @@ public final class LmxLibrary: @unchecked Sendable {
     /// 按优先级解析 dylib 路径并加载：
     ///  1. 配置 camera.dylibPath 非空
     ///  2. Bundle.module 资源（CameraKit target 自带 libLmxptpif.dylib）
-    ///  3. 开发兜底：<可执行文件上三级>/lib/libLmxptpif.dylib
-    ///  4. 开发兜底：/Users/liqiang/src/booth/lib/libLmxptpif.dylib
+    ///  3. 开发兜底：<可执行文件上三级>/Sources/CameraKit/libLmxptpif.dylib
+    ///  4. 开发兜底：/Users/liqiang/src/booth/Sources/CameraKit/libLmxptpif.dylib
     public static func load(configuredPath: String) throws -> LmxLibrary {
         let candidates = candidatePaths(configuredPath: configuredPath)
         var searched: [String] = []
@@ -182,15 +182,15 @@ public final class LmxLibrary: @unchecked Sendable {
         if let res = Bundle.module.url(forResource: "libLmxptpif", withExtension: "dylib") {
             paths.append(res.path)
         }
-        // <可执行文件上三级>/lib/libLmxptpif.dylib（DerivedData/.../Debug/booth → 工程根）
+        // <可执行文件上三级>/Sources/CameraKit/libLmxptpif.dylib（DerivedData/.../Debug/booth → 工程根）
         if let exe = Bundle.main.executableURL {
             let devLib = exe.deletingLastPathComponent()
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
-                .appendingPathComponent("lib/libLmxptpif.dylib")
+                .appendingPathComponent("Sources/CameraKit/libLmxptpif.dylib")
             paths.append(devLib.path)
         }
-        paths.append("/Users/liqiang/src/booth/lib/libLmxptpif.dylib")
+        paths.append("/Users/liqiang/src/booth/Sources/CameraKit/libLmxptpif.dylib")
         return paths
     }
 }

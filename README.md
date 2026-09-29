@@ -7,16 +7,12 @@
 ```
 booth/
 ├── lmx.py                    # ctypes 绑定：连接/预览/拍摄/下载 全能力（可直接跑）
-├── lib/
-│   └── libLmxptpif.dylib     # 原厂库 (universal x86_64+arm64，仅依赖系统框架)
-└── analysis/                 # 逆向分析成果（开发参考，非运行时依赖）
-    ├── ANALYSIS.md           # ★ API 地图 / 结构体布局 / 事件表 / 官方调用序列
-    ├── decompiled/           # 111 个核心函数的 Hex-Rays 伪代码 (按地址_函数名.c)
-    ├── all_funcs.txt         # 库内全部函数清单 (地址 + demangle 名)
-    ├── summary.txt           # 反编译产物索引
-    ├── dump_api.py           # IDAPython 批量反编译脚本（可复现）
-    └── ida/                  # arm64 单架构 + .i64 数据库 (IDA 9.3)
+└── Sources/CameraKit/
+    └── libLmxptpif.dylib     # 原厂库 (universal x86_64+arm64，仅依赖系统框架)
 ```
+
+> 逆向分析成果（ANALYSIS.md / 反编译伪代码 / IDA 数据库）已从 git 历史移除，
+> 保留在本机仓库外的 `../booth-analysis/`（开发参考，非运行时依赖）。
 
 ## 快速上手
 
@@ -41,7 +37,7 @@ data = cam.download(handle)         # 照片完整字节
 cam.close()
 ```
 
-## 开发要点（详见 analysis/ANALYSIS.md）
+## 开发要点（详见 ../booth-analysis/ANALYSIS.md）
 
 - **拍照就绪信号**：`Reg_NotifyCallback(0x10000040, cb)`，回调 `param` 即新照片 handle
 - **预览帧**：轮询 `Mnt_Get_LiveView_data`，忙时返回 err=0x40004（无新帧），JPEG 约 10-30fps

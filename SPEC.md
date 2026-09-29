@@ -113,11 +113,11 @@
 
 ## 4. CameraKit — 相机连接
 
-基于既有逆向成果（`analysis/ANALYSIS.md`、`lmx.py` 已实测全链路），Swift 直接加载 `lib/libLmxptpif.dylib`。
+基于既有逆向成果（`../booth-analysis/ANALYSIS.md`、`lmx.py` 已实测全链路），Swift 直接加载 `Sources/CameraKit/libLmxptpif.dylib`。
 
 ### 4.1 加载方式
 
-`dlopen("lib/libLmxptpif.dylib", RTLD_NOW)` + `dlsym` 动态解析符号，封装为 `LmxLibrary` 单例。选 dlopen 而非 link-time 绑定的原因：库 install_name 为 `/usr/local/lib/...`，dlopen 绝对路径最稳；且符号解析失败可在启动时给出友好报错。所有 API 的 C 签名以 ANALYSIS.md §3 为准。注意导出符号是 C++ mangled 名（如 `_Z32LMX_func_api_StilLCapture_SinglePc`），`lmx.py` 第 94–146 行已有完整 mangled 名对照表，直接移植。
+`dlopen("Sources/CameraKit/libLmxptpif.dylib", RTLD_NOW)` + `dlsym` 动态解析符号，封装为 `LmxLibrary` 单例。选 dlopen 而非 link-time 绑定的原因：库 install_name 为 `/usr/local/lib/...`，dlopen 绝对路径最稳；且符号解析失败可在启动时给出友好报错。所有 API 的 C 签名以 ANALYSIS.md §3 为准。注意导出符号是 C++ mangled 名（如 `_Z32LMX_func_api_StilLCapture_SinglePc`），`lmx.py` 第 94–146 行已有完整 mangled 名对照表，直接移植。
 
 ### 4.2 连接生命周期
 
@@ -232,8 +232,8 @@ booth/
 │                                  #   SessionEngine/ImagingKit/PrintKit/BoothServer) + BoothApp
 ├── Sources/...                    # 按模块分 target
 ├── Tests/...                      # 单测：状态机/管线合成/配置/协议（相机与打印用 mock）
-├── lib/libLmxptpif.dylib          # 既有，CameraKit dlopen 加载
-├── lmx.py / analysis/             # 既有逆向成果，开发参考
+├── Sources/CameraKit/libLmxptpif.dylib  # 既有，CameraKit dlopen 加载
+├── lmx.py                        # 既有逆向验证脚本，开发参考
 └── SPEC.md                        # 本文档
 ```
 
