@@ -21,8 +21,7 @@ struct OpStatusTab: View {
             BoothCard {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("相机").font(theme.bodyFont(24, weight: .bold)).foregroundStyle(theme.textColor)
-                    Text(vm.cameraState.emoji)
-                        .font(.system(size: 64))
+                    BoothIcon(emoji: vm.cameraState.emoji, size: 68)
                     BoothStatusPill.camera(vm.cameraState, theme: theme)
                     Text(cameraHint)
                         .font(theme.bodyFont(16))
@@ -58,7 +57,7 @@ struct OpStatusTab: View {
                         HStack {
                             Spacer()
                             VStack(spacing: 10) {
-                                Text("🖨️").font(.system(size: 48))
+                                BoothIcon(emoji: "🖨️", size: 50)
                                 Text("队列为空，等待打印任务")
                                     .font(theme.bodyFont(18))
                                     .foregroundStyle(theme.textSecondaryColor)
@@ -136,7 +135,7 @@ struct OpStatusTab: View {
             if let img = NSImage(contentsOfFile: job.imagePath) {
                 Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
             } else {
-                Text("🖼️").font(.system(size: 28))
+                BoothIcon(emoji: "🖼️", size: 30)
             }
         }
     }

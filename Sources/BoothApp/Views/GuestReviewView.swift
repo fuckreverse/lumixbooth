@@ -15,9 +15,12 @@ struct GuestReviewView: View {
             theme.backgroundColor.ignoresSafeArea()
 
             VStack(spacing: 18) {
-                Text("看看成片 🎉")
-                    .font(theme.titleFont(40))
-                    .foregroundStyle(theme.textColor)
+                HStack(spacing: 10) {
+                    Text("看看成片")
+                    BoothIcon(emoji: "🎉", size: 42)
+                }
+                .font(theme.titleFont(40))
+                .foregroundStyle(theme.textColor)
 
                 // 成片大图（展示位图；换滤镜后 photoId 变化自然重载）
                 ZStack {
@@ -27,7 +30,7 @@ struct GuestReviewView: View {
                             .aspectRatio(contentMode: .fit)
                             .id(photo.id)   // 重打后新 id → 强制重建重读文件
                     } else {
-                        Text("🖼️").font(.system(size: 80))
+                        BoothIcon(emoji: "🖼️", size: 84)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -71,8 +74,11 @@ struct GuestReviewView: View {
         return Button {
             vm.selectFilter(f)
         } label: {
-            Text("\(f.emoji) \(f.displayName)")
-                .font(theme.bodyFont(17, weight: .bold))
+            HStack(spacing: 6) {
+                BoothIcon(emoji: f.emoji, size: 20)
+                Text(f.displayName)
+            }
+            .font(theme.bodyFont(17, weight: .bold))
                 .foregroundStyle(selected ? theme.textColor : theme.textSecondaryColor)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)

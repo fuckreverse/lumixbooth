@@ -56,6 +56,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var continuousCollage = false      // 拼版连拍不中断：仅首张倒计时，后续立即拍（吞吐翻倍）
         public var idleSlideshow = true           // IDLE 吸引页轮播历史成片
         public var idleSlideshowSec = 6           // 轮播间隔（秒）
+        public var idleCooldownAfterPrintSec = 0  // 打印完成回待机后自动 armed 冷却（秒；0=不冷却）
         public init() {}
 
         // 向后兼容解码：老配置缺新字段 → 默认值，不丢已有设置
@@ -63,6 +64,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             case countdownSec, defaultMode, reviewTimeoutSec, autoPrintOnTimeout
             case gestureTimeoutSec, armedTimeoutSec
             case continuousCollage, idleSlideshow, idleSlideshowSec
+            case idleCooldownAfterPrintSec
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -75,6 +77,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             continuousCollage = try c.decodeIfPresent(Bool.self, forKey: .continuousCollage) ?? false
             idleSlideshow = try c.decodeIfPresent(Bool.self, forKey: .idleSlideshow) ?? true
             idleSlideshowSec = try c.decodeIfPresent(Int.self, forKey: .idleSlideshowSec) ?? 6
+            idleCooldownAfterPrintSec = try c.decodeIfPresent(Int.self, forKey: .idleCooldownAfterPrintSec) ?? 0
         }
     }
 

@@ -21,8 +21,11 @@ struct GuestCapturingView: View {
 
             VStack {
                 Spacer()
-                Text(total > 1 ? "第 \(shot)/\(total) 张 📸" : "拍照啦 📸")
-                    .font(theme.bodyFont(30, weight: .bold))
+                HStack(spacing: 8) {
+                    Text(total > 1 ? "第 \(shot)/\(total) 张" : "拍照啦")
+                    BoothIcon(emoji: "📸", size: 32)
+                }
+                .font(theme.bodyFont(30, weight: .bold))
                     .foregroundStyle(theme.textOnAccentColor)
                     .padding(.horizontal, 32).padding(.vertical, 14)
                     .background(theme.accentColor, in: Capsule())

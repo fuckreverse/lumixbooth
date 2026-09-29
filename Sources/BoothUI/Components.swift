@@ -19,7 +19,7 @@ public struct BoothPrimaryButton: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                if let emoji { Text(emoji).font(.system(size: 28)) }
+                if let emoji { BoothIcon(emoji: emoji, size: 30) }
                 Text(title).font(theme.bodyFont(26, weight: .bold))
             }
             .foregroundStyle(theme.textOnAccentColor)
@@ -45,7 +45,7 @@ public struct BoothSecondaryButton: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                if let emoji { Text(emoji).font(.system(size: 22)) }
+                if let emoji { BoothIcon(emoji: emoji, size: 24) }
                 Text(title).font(theme.bodyFont(22))
             }
             .foregroundStyle(theme.accentColor)
@@ -95,7 +95,7 @@ public struct BoothStatusPill: View {
 
     public var body: some View {
         HStack(spacing: 6) {
-            Text(emoji).font(.system(size: 16))
+            BoothIcon(emoji: emoji, size: 17)
             Text(text).font(theme.bodyFont(16, weight: .bold))
         }
         .foregroundStyle(tint)
@@ -124,8 +124,7 @@ public struct FloatingEmojis: View {
     public var body: some View {
         GeometryReader { geo in
             ForEach(Array(theme.idleEmojis.enumerated()), id: \.offset) { i, emoji in
-                Text(emoji)
-                    .font(.system(size: 44))
+                BoothIcon(emoji: emoji, size: 48)
                     .opacity(0.25)
                     .position(
                         x: geo.size.width * CGFloat(0.12 + 0.19 * Double(i % 5)),

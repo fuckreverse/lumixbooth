@@ -21,13 +21,16 @@ struct GuestIdleView: View {
 
             VStack(spacing: 30) {
                 Spacer()
-                Text(theme.mascotEmoji).font(.system(size: 84))
+                BoothIcon(emoji: theme.mascotEmoji, size: 96)
                 Text("LUMIX 拍照亭")
                     .font(theme.titleFont(56))
                     .foregroundStyle(theme.textColor)
-                Text("靠近一点，我们开始吧 💖")
-                    .font(theme.bodyFont(26))
-                    .foregroundStyle(theme.textSecondaryColor)
+                HStack(spacing: 6) {
+                    Text("靠近一点，我们开始吧")
+                    BoothIcon(emoji: "💖", size: 26)
+                }
+                .font(theme.bodyFont(26))
+                .foregroundStyle(theme.textSecondaryColor)
 
                 // 拍摄模式选择（两个大卡片，选中高亮）
                 HStack(spacing: 28) {
@@ -99,8 +102,7 @@ struct GuestIdleView: View {
                     .font(theme.bodyFont(15, weight: .bold))
                     .foregroundStyle(theme.textSecondaryColor)
             } else {
-                Text("📱")
-                    .font(.system(size: 40))
+                BoothIcon(emoji: "📱", size: 44)
                 Text(composition.serverRunning ? "正在获取地址…" : "iPad 服务未启动")
                     .font(theme.bodyFont(15, weight: .bold))
                     .foregroundStyle(theme.textSecondaryColor)
@@ -188,7 +190,7 @@ private struct ModeCard: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 10) {
-                Text(emoji).font(.system(size: 52))
+                BoothIcon(emoji: emoji, size: 56)
                 Text(title)
                     .font(theme.bodyFont(24, weight: .bold))
                     .foregroundStyle(selected ? theme.accentColor : theme.textColor)

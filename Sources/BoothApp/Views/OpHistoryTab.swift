@@ -30,7 +30,7 @@ struct OpHistoryTab: View {
             if vm.sessions.isEmpty {
                 Spacer()
                 VStack(spacing: 12) {
-                    Text("🖼️").font(.system(size: 56))
+                    BoothIcon(emoji: "🖼️", size: 58)
                     Text(vm.loading ? "正在读取…" : "还没有历史成片")
                         .font(theme.bodyFont(20))
                         .foregroundStyle(theme.textSecondaryColor)
@@ -60,8 +60,7 @@ struct OpHistoryTab: View {
                         .frame(height: 200)
                         .clipShape(RoundedRectangle(cornerRadius: theme.cornerRadiusSmall, style: .continuous))
                 } else {
-                    Text("🖼️")
-                        .font(.system(size: 56))
+                    BoothIcon(emoji: "🖼️", size: 58)
                         .frame(height: 200)
                 }
 

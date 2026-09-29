@@ -54,6 +54,9 @@ enum WebAssets {
           #livebox.hidden, body.review #livebox, body.printing #livebox, body.countdown #livebox { display:none; }
 
           .big-emoji { font-size:118px; line-height:1.25; }
+          .big-emoji img { width:190px; height:190px; object-fit:contain; }
+          .tic { height:1em; vertical-align:-0.12em; }
+          .eic { width:110px; height:110px; object-fit:contain; }
           .big-text  { font-size:34px; font-weight:700; margin-top:16px; }
           .sub       { font-size:22px; margin-top:10px; opacity:.7; }
 
@@ -105,7 +108,7 @@ enum WebAssets {
           <header>LUMIX 拍照屋</header>
           <div id="livebox"><img id="liveimg" alt="实时取景" src="/live"></div>
           <main><div class="card" id="stage"></div></main>
-          <div class="links"><a href="/gallery">📖 相册</a><a href="/slideshow">🎞️ 放映</a></div>
+          <div class="links"><a href="/gallery"><img class="tic" src="/theme/icon/album.png" onerror="this.outerHTML='📖'"> 相册</a><a href="/slideshow"><img class="tic" src="/theme/icon/film.png" onerror="this.outerHTML='🎞️'"> 放映</a></div>
 
         <script>
         var ws = null, cur = null, copies = 2, modeKind = 'collage', takeTimer = null;
@@ -115,6 +118,12 @@ enum WebAssets {
         var stage   = document.getElementById('stage');
         var livebox = document.getElementById('livebox');
         var liveimg = document.getElementById('liveimg');
+
+        // 主题图标：优先显示主题包插画（/theme/icon/<key>.png），加载失败回退 emoji 文本
+        function ic(key, emoji, cls) {
+          return '<img class="' + (cls || 'tic') + '" src="/theme/icon/' + key + '.png" alt="' + emoji +
+                 '" onerror="this.outerHTML=\'' + emoji + '\'">';
+        }
 
         // LiveView 小窗点击收起/展开
         livebox.addEventListener('click', function () { livebox.classList.toggle('hidden'); });
@@ -165,20 +174,20 @@ enum WebAssets {
             return;
           }
           var map = {
-            idle:       ['📸', '看镜头准备拍照'],
-            armed:      ['😊', '站好啦，看镜头'],
-            gestureWait:['✌️', '比个耶，开始拍照！'],
-            capturing:  ['📷', '拍摄中'],
-            processing: ['✨', '正在修图'],
-            printing:   ['🖨️', '打印中，请稍候']
+            idle:       ['camera', '📸', '看镜头准备拍照'],
+            armed:      ['smile', '😊', '站好啦，看镜头'],
+            gestureWait:['peace', '✌️', '比个耶，开始拍照！'],
+            capturing:  ['camera', '📷', '拍摄中'],
+            processing: ['sparkle', '✨', '正在修图'],
+            printing:   ['printer', '🖨️', '打印中，请稍候']
           };
           if (map[s]) {
             var sub = '';
             if (s === 'capturing' && m.shot && m.of) sub = '第 ' + m.shot + ' / ' + m.of + ' 张';
             if (s === 'printing' && m.copies)       sub = '共 ' + m.copies + ' 张';
             stage.innerHTML =
-              '<div class="big-emoji">' + map[s][0] + '</div>' +
-              '<div class="big-text">' + map[s][1] + '</div>' +
+              '<div class="big-emoji">' + ic(map[s][0], map[s][1]) + '</div>' +
+              '<div class="big-text">' + map[s][2] + '</div>' +
               (sub ? '<div class="sub">' + sub + '</div>' : '') +
               (s === 'idle' ? modeRow() : '');
             syncModeButtons();
@@ -188,7 +197,7 @@ enum WebAssets {
             stage.innerHTML = '<div class="fail">' + (m.message || '出错了，请稍候') + '</div>';
             return;
           }
-          stage.innerHTML = '<div class="big-emoji">📷</div><div class="big-text">LUMIX 拍照屋</div>';
+          stage.innerHTML = '<div class="big-emoji">' + ic('camera', '📷') + '</div><div class="big-text">LUMIX 拍照屋</div>';
         }
 
         // 待机页拍摄模式选择（单张 / 四连拍拼图）
@@ -226,14 +235,14 @@ enum WebAssets {
                 '<span class="num" id="cop-num">' + copies + '</span><span class="unit">张</span>' +
                 '<button id="cop-plus">＋</button>' +
               '</div>' +
-              '<button class="btn btn-peach" id="btn-print">打印 🖨️</button>'
+              '<button class="btn btn-peach" id="btn-print">打印 ' + ic('printer', '🖨️') + '</button>'
             : '';
           stage.innerHTML =
             '<img class="photo" src="/photo/' + photoId + '?t=' + Date.now() + '">' +
             filterRow +
             '<div class="controls">' +
               printControls +
-              '<button class="btn btn-ghost" id="btn-retake">重拍 🔄</button>' +
+              '<button class="btn btn-ghost" id="btn-retake">重拍 ' + ic('retake', '🔄') + '</button>' +
             '</div>';
         }
 
@@ -255,7 +264,7 @@ enum WebAssets {
           cur = 'takephoto';
           document.body.classList.remove('printing');
           stage.innerHTML =
-            '<div class="big-emoji">🎉</div>' +
+            '<div class="big-emoji">' + ic('confetti', '🎉') + '</div>' +
             '<div class="big-text">请取照片</div>' +
             '<div class="sub">手机扫码可保存电子版</div>';
           takeTimer = setTimeout(function () {
@@ -338,11 +347,11 @@ enum WebAssets {
 
     /// iPad 独立相册页：两列瀑布流，点图全屏查看（长按可保存）
     static let galleryHTML: String = pageShell(
-        title: "📷 LUMIX 相册",
+        title: "<img class=\"tic\" src=\"/theme/icon/camera.png\" onerror=\"this.outerHTML='📷'\"> LUMIX 相册",
         bodyHTML: #"""
         <div id="grid"></div>
         <div class="empty" id="empty" style="display:none">
-          <span class="emoji">📭</span>还没有成片，拍一张就有了
+          <span class="emoji"><img class="eic" src="/theme/icon/mailbox.png" onerror="this.outerHTML='📭'"></span>还没有成片，拍一张就有了
         </div>
         <style>
           #grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; padding:14px; }
@@ -384,11 +393,11 @@ enum WebAssets {
     /// iPad 独立放映页：全屏轮播历史成片（点击暂停/继续，秒间隔跟随服务端配置注入）
     static func slideshowHTML(intervalSec: Int) -> String {
         pageShell(
-            title: "🎞️ LUMIX 放映",
+            title: "<img class=\"tic\" src=\"/theme/icon/film.png\" onerror=\"this.outerHTML='🎞️'\"> LUMIX 放映",
             bodyHTML: #"""
             <div id="slide"></div>
             <div class="empty" id="empty" style="display:none">
-              <span class="emoji">📭</span>还没有成片可放映
+              <span class="emoji"><img class="eic" src="/theme/icon/mailbox.png" onerror="this.outerHTML='📭'"></span>还没有成片可放映
             </div>
             <style>
               #slide { display:none; align-items:center; justify-content:center; height:100%; }

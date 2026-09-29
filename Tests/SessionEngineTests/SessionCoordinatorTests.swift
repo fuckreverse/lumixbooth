@@ -28,10 +28,13 @@ final class SessionCoordinatorTests: XCTestCase {
     private var server = MockServer()
     private var bus = EventBus()
     private var recorder = StateRecorder()
+    private var savedConfig: BoothConfig?   // 测试前真实配置快照（update 会落盘）
 
     // MARK: - 搭建
 
     override func setUp() async throws {
+        // 先快照真实配置（shared.update 会写真实 config.json），tearDown 还原
+        savedConfig = await ConfigStore.shared.config
         // 重置共享配置到默认值，各测试再覆写关键字段
         await ConfigStore.shared.update { c in c = BoothConfig() }
         camera = MockCamera()
@@ -45,8 +48,10 @@ final class SessionCoordinatorTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        // 还原默认配置，避免污染落盘的 config.json
-        await ConfigStore.shared.update { c in c = BoothConfig() }
+        // 还原测试前的真实配置，避免污染落盘的 config.json
+        if let savedConfig {
+            await ConfigStore.shared.update { c in c = savedConfig }
+        }
     }
 
     /// 组装被测对象并挂上状态记录器

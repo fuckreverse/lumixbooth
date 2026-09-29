@@ -25,9 +25,12 @@ struct OperatorScreen: View {
         VStack(spacing: 0) {
             // 顶部条：标题 + 返回大屏（每次返回都会重新上锁）
             HStack {
-                Text("操作员后台 🛠️")
-                    .font(theme.titleFont(30))
-                    .foregroundStyle(theme.textColor)
+                HStack(spacing: 10) {
+                    Text("操作员后台")
+                        .font(theme.titleFont(30))
+                        .foregroundStyle(theme.textColor)
+                    BoothIcon(emoji: "🛠️", size: 32)
+                }
                 Spacer()
                 if composition.isMock {
                     BoothStatusPill(emoji: "🧪", text: "Mock 模式", tint: theme.warningColor)

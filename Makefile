@@ -1,5 +1,5 @@
 # LUMIX Photobooth
-.PHONY: build test run run-mock open-prints verify clean log
+.PHONY: build test run run-mock open-prints verify clean log install-theme
 
 build:
 	swift build
@@ -27,6 +27,10 @@ app: build
 run-mock-app: app
 	-pkill -x booth
 	open .build/Booth.app --args -mock
+
+# 安装主题包到运行时主题目录（操作员后台主题名填 cream-wedding 启用）
+install-theme:
+	swift tools/InstallTheme.swift assets/themes/cream-wedding
 
 # 打开 dry-run 打印的 PDF 输出目录
 open-prints:

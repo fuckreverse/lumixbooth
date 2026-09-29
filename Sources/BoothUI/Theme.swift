@@ -62,8 +62,15 @@ public final class ThemeProvider: ObservableObject {
     }
 
     /// 从主题目录加载 theme.json（找不到/损坏 → 保留默认并记日志）
+    /// 无论 theme.json 是否存在，只要 icons/ 子目录存在就激活主题图标
     public func load(name: String) {
-        let url = BoothPaths.themesDir.appendingPathComponent("\(name)/theme.json")
+        let dir = BoothPaths.themesDir.appendingPathComponent(name, isDirectory: true)
+        defer {
+            IconCache.clear()
+            ThemeIcons.activate(themeDir: FileManager.default.fileExists(atPath: dir.path) ? dir : nil)
+            Log.ui.info("主题图标: \(ThemeIcons.themeDir != nil ? "已激活 \(name)" : "未激活（回退 emoji）")")
+        }
+        let url = dir.appendingPathComponent("theme.json")
         guard let data = try? Data(contentsOf: url) else {
             Log.ui.info("主题 \(name) 无 theme.json，用默认主题")
             return

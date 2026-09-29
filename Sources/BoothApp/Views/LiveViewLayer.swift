@@ -17,7 +17,7 @@ struct LiveViewLayer: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 16) {
-                    Text("📷").font(.system(size: 72))
+                    BoothIcon(emoji: "📷", size: 76)
                     Text("等待相机画面…")
                         .font(theme.bodyFont(24))
                         .foregroundStyle(theme.textSecondaryColor)

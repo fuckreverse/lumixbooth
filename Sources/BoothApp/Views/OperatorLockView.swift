@@ -55,8 +55,7 @@ struct OperatorLockView: View {
 
     private var header: some View {
         VStack(spacing: 10) {
-            Text(gate.pendingQuit ? "🛑" : "🔒")
-                .font(.system(size: 64))
+            BoothIcon(emoji: gate.pendingQuit ? "🛑" : "🔒", size: 68)
             Text(titleText)
                 .font(theme.titleFont(34))
                 .foregroundStyle(theme.textColor)

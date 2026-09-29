@@ -66,6 +66,7 @@ public actor SessionCoordinator {
     // MARK: - 防抖计数
 
     private var frameIndex = 0        // 帧序号（detectEveryNFrames 抽帧用）
+    private var autoArmSuppressedUntil: Date?   // 打印后自动触发冷却截止时刻（手动触发不受影响）
     private var readyStreak = 0       // armed 态连续就绪帧
     private var absentStreak = 0      // armed 态连续无人帧
     private var gestureStreak = 0     // gestureWait 态连续手势命中帧
@@ -256,6 +257,11 @@ public actor SessionCoordinator {
 
         switch state {
         case .idle:
+            // 打印后冷却：暂停自动 armed，让主界面停留、下一轮从主界面开始（手动触发不受影响）
+            if let until = autoArmSuppressedUntil {
+                if Date() < until { return }
+                autoArmSuppressedUntil = nil
+            }
             // IDLE 也要跑就绪检测——SPEC：ARMED 进入条件是"检测到人进入取景区域"
             guard cfg.vision.poseReadinessEnabled else { return }
             let r = await readiness.detectReadiness(in: frame)
@@ -442,6 +448,12 @@ public actor SessionCoordinator {
             let dwell = printingDwell ?? Double(max(0, cfg.printing.printingDwellSec))
             try? await Task.sleep(nanoseconds: UInt64(max(0, dwell) * 1_000_000_000))
             guard !Task.isCancelled else { return }
+            // 打印完成回待机后的自动触发冷却（主界面停留 N 秒内不自动 armed）
+            let cooldown = Double(max(0, cfg.capture.idleCooldownAfterPrintSec))
+            if cooldown > 0 {
+                autoArmSuppressedUntil = Date().addingTimeInterval(cooldown)
+                Log.session.info("打印完成回待机，自动触发冷却 \(cooldown)s（期间可手动/按钮开始下一轮）")
+            }
             await resetToIdle("打印完成，回待机")
         }
     }

@@ -20,14 +20,25 @@ struct GuestGuidanceView: View {
                 Spacer()
                 BoothCard {
                     VStack(spacing: 12) {
-                        // 姿势引导示意图占位（主题 emoji 大字代替素材）
-                        HStack(spacing: 22) {
-                            Text(stage == .armed ? "🧍‍♀️" : "✌️").font(.system(size: 64))
-                            Text(stage == .armed ? "🧍" : "👋").font(.system(size: 64))
+                        // 姿势引导示意图（主题插画，无主题图回退 emoji）
+                        HStack(spacing: 26) {
+                            BoothIcon(emoji: stage == .armed ? "🧍‍♀️" : "✌️", size: 72)
+                            BoothIcon(emoji: stage == .armed ? "🧍" : "👋", size: 72)
                         }
-                        Text(stage == .armed ? "站好啦，看着你啦 👀" : "比个耶 ✌️ 或挥手 👋 开始拍照")
-                            .font(theme.bodyFont(26, weight: .bold))
-                            .foregroundStyle(theme.textColor)
+                        HStack(spacing: 6) {
+                            if stage == .armed {
+                                Text("站好啦，看着你啦")
+                                BoothIcon(emoji: "👀", size: 26)
+                            } else {
+                                Text("比个耶")
+                                BoothIcon(emoji: "✌️", size: 26)
+                                Text("或挥手")
+                                BoothIcon(emoji: "👋", size: 26)
+                                Text("开始拍照")
+                            }
+                        }
+                        .font(theme.bodyFont(26, weight: .bold))
+                        .foregroundStyle(theme.textColor)
                     }
                 }
                 .padding(.bottom, 48)

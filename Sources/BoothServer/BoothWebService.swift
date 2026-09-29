@@ -392,10 +392,25 @@ public actor BoothWebService: BoothWebServing {
         case ("GET", let p) where p.hasPrefix("/photo/"):
             servePhoto(conn, String(p.dropFirst("/photo/".count)))
 
+        case ("GET", let p) where p.hasPrefix("/theme/icon/"):
+            serveThemeIcon(conn, String(p.dropFirst("/theme/icon/".count)))
+
         default:
             Log.server.warn("未知路由 \(req.method) \(req.path) → 404")
             send(conn, HTTPResponse.notFound(), thenCancel: true)
         }
+    }
+
+    /// 主题图标：/theme/icon/<key>.png（key 仅限映射表内的语义名，防路径穿越）
+    private func serveThemeIcon(_ conn: NWConnection, _ rawKey: String) {
+        let key = rawKey.lowercased().hasSuffix(".png") ? String(rawKey.dropLast(4)) : rawKey
+        let valid = key.allSatisfy { $0.isLetter && $0.isASCII || $0 == "-" }
+        guard valid, let data = ThemeIcons.data(for: key) else {
+            Log.server.warn("主题图标不存在: \(rawKey) → 404")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+            return
+        }
+        send(conn, HTTPResponse.ok(contentType: "image/png", body: data), thenCancel: true)
     }
 
     private func servePhoto(_ conn: NWConnection, _ rawID: String) {

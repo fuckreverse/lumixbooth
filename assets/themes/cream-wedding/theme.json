@@ -1,0 +1,18 @@
+{
+  "accent": "#FF8FAB",
+  "accentSecondary": "#FFC2D4",
+  "background": "#FFF7F0",
+  "backgroundSecondary": "#FFFFFF",
+  "text": "#4A3434",
+  "textSecondary": "#A08C8C",
+  "textOnAccent": "#FFFFFF",
+  "success": "#7DC98F",
+  "warning": "#FFB55C",
+  "danger": "#F07070",
+  "cornerRadius": 24,
+  "cornerRadiusSmall": 14,
+  "fontName": "",
+  "mascotEmoji": "📸",
+  "idleEmojis": ["📸", "🎉", "💖", "✨", "🎀"],
+  "bounceDuration": 0.35
+}

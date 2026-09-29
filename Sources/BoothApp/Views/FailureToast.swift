@@ -8,7 +8,7 @@ struct FailureToast: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("😵").font(.system(size: 22))
+            BoothIcon(emoji: "😵", size: 24)
             Text(message)
                 .font(theme.bodyFont(20, weight: .bold))
                 .lineLimit(2)

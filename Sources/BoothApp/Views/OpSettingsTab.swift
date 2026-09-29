@@ -501,7 +501,7 @@ struct OpSettingsTab: View {
 
     private func cardTitle(_ text: String, emoji: String) -> some View {
         HStack(spacing: 8) {
-            Text(emoji).font(.system(size: 24))
+            BoothIcon(emoji: emoji, size: 26)
             Text(text).font(theme.bodyFont(22, weight: .bold)).foregroundStyle(theme.textColor)
         }
     }
