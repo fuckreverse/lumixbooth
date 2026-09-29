@@ -454,6 +454,54 @@ final class DecorationTests: XCTestCase {
         XCTAssertEqual(decoded.decorationTemplate, "")
     }
 
+    // MARK: - 婚礼素材包（assets/decorations，仓库内置起步包）
+
+    /// 仓库内婚礼素材包目录（tools/MakeWeddingStickers.swift 生成，自包含：
+    /// 每个模板目录含 template.json + 其引用的全部贴纸）
+    private var weddingAssetsDir: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()        // Tests/ImagingKitTests/
+            .deletingLastPathComponent()        // Tests/
+            .deletingLastPathComponent()        // 包根
+            .appendingPathComponent("assets/decorations", isDirectory: true)
+    }
+
+    /// 素材包内 5 个婚礼模板全部能被 DecorationCore 加载，且引用的贴纸文件齐全
+    func testWeddingAssetPackTemplatesLoad() throws {
+        let names = ["wedding-elegant", "wedding-fun", "wedding-comic",
+                     "wedding-chinese", "wedding-sweet"]
+        for name in names {
+            let loaded = DecorationCore.loadTemplate(named: name, decorationsDir: weddingAssetsDir)
+            XCTAssertNotNil(loaded, "婚礼模板 \(name) 加载失败")
+            guard let template = loaded else { continue }
+            XCTAssertFalse(template.stickers.isEmpty, "\(name) 应含贴纸")
+            for sticker in template.stickers {
+                let file = weddingAssetsDir
+                    .appendingPathComponent(name, isDirectory: true)
+                    .appendingPathComponent(sticker.file)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: file.path),
+                              "\(name) 引用的贴纸缺失: \(sticker.file)")
+                XCTAssertNotNil(PipelineCore.loadCGImage(file),
+                                "\(name) 贴纸无法解码: \(sticker.file)")
+            }
+        }
+    }
+
+    /// 婚礼模板完整应用（含形变+贴纸+字幕）不抛错、输出尺寸不变
+    func testWeddingAssetPackApplyEndToEnd() async throws {
+        guard let template = DecorationCore.loadTemplate(named: "wedding-fun",
+                                                         decorationsDir: weddingAssetsDir) else {
+            return XCTFail("wedding-fun 加载失败")
+        }
+        let image = makeFaceImage()
+        let faces = [FaceGeometry(rect: CGRect(x: 360, y: 280, width: 80, height: 40), rollAngle: 0)]
+        let out = try DecorationCore.apply(image, template: template, faces: faces,
+                                           templateDir: weddingAssetsDir.appendingPathComponent("wedding-fun", isDirectory: true),
+                                           ctx: ciContext)
+        XCTAssertEqual(CGSize(width: out.width, height: out.height),
+                       CGSize(width: image.width, height: image.height))
+    }
+
     // MARK: - 复用工具
 
     /// 读 JPEG/PNG 文件像素尺寸

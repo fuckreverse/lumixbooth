@@ -1,0 +1,8 @@
+{
+  "stickers": [
+    {"file": "veil.png", "anchor": "faceTop", "scale": 2.8, "offsetY": 1.1},
+    {"file": "flower.png", "anchor": "faceTop", "scale": 0.6, "offsetX": -0.95, "offsetY": 0.05},
+    {"file": "flower.png", "anchor": "faceTop", "scale": 0.6, "offsetX": 0.95, "offsetY": 0.05}
+  ],
+  "caption": {"text": "我们结婚啦", "colorHex": "#D4476B", "size": 72}
+}

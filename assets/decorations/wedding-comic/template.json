@@ -1,0 +1,10 @@
+{
+  "warps": [{"kind": "bigEyes", "strength": 0.5}],
+  "stickers": [
+    {"file": "heart.png", "anchor": "faceTop", "scale": 0.8, "offsetX": -0.9, "offsetY": 0.55},
+    {"file": "heart.png", "anchor": "faceTop", "scale": 0.55, "offsetX": 0.85, "offsetY": 0.95},
+    {"file": "glasses.png", "anchor": "eyeMidpoint", "scale": 2.3, "offsetY": 0.05}
+  ],
+  "filter": "comic",
+  "caption": {"text": "爱情使人上头", "colorHex": "#FFD700", "size": 64}
+}
