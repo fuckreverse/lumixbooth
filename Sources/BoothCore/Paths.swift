@@ -49,6 +49,13 @@ public enum BoothPaths {
         return dir
     }()
 
+    /// 演示 dry-run 打印的 PDF 输出目录（PreviewPrintBackend 默认落盘点）
+    public static let printPreviewDir: URL = {
+        let dir = appSupport.appendingPathComponent("print-preview", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     /// 新建一次拍照会话目录：sessions/<yyyy-MM-dd>/<HHmmss-短id>/
     public static func newSessionDir(now: Date = Date()) -> URL {
         let day = DateFormatter.boothDay.string(from: now)

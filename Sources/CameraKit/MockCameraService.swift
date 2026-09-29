@@ -245,8 +245,8 @@ public enum MockImageFactory {
         ] as CFDictionary
         let attrStr = CFAttributedStringCreate(nil, label as CFString, attrs)!
         let line = CTLineCreateWithAttributedString(attrStr)
-        // bitmap context 原点在左下，文字矩阵翻转使其正立
-        ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        // CGBitmapContext→CGImage→JPEG→显示 整条链保持 CG y-up 方向（实测验证），
+        // CoreText identity 矩阵即为正立；不要再翻转 textMatrix（翻了反而倒立）
         ctx.textPosition = CGPoint(x: CGFloat(width) * 0.06, y: CGFloat(height) * 0.1)
         CTLineDraw(line, ctx)
 

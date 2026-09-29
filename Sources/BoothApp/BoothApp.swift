@@ -27,8 +27,8 @@ private enum CompositionHolder {
 final class AppComposition: ObservableObject {
     let isMock: Bool
     let camera: any CameraServicing
-    let gesture: GestureDetector
-    let readiness: PoseReadinessDetector
+    let gesture: any GestureDetecting
+    let readiness: any PoseReadinessDetecting
     let segmenter: PersonSegmenter
     let landmarker: FaceLandmarkDetector
     let imaging: ImagingService
@@ -64,17 +64,25 @@ final class AppComposition: ObservableObject {
             Log.ui.info("模块[1/6] 相机 = LumixCameraService（libLmxptpif）")
         }
         // ② 视觉四件套（手势 / 姿势就绪 / 人像分割 / 人脸关键点）
-        gesture = GestureDetector()
-        readiness = PoseReadinessDetector()
+        //    Mock 模式手势/就绪用可编程检测器：合成渐变图里没有人，真实 Vision 永远检不出，
+        //    自动触发链路（armed→gestureWait→countdown）需要 Mock 恒定命中才能演示
+        if isMock {
+            gesture = MockGestureDetector()
+            readiness = MockReadinessDetector()
+            Log.ui.info("模块[2/6] 视觉 = MockGestureDetector + MockReadinessDetector + PersonSegmenter + FaceLandmarkDetector")
+        } else {
+            gesture = GestureDetector()
+            readiness = PoseReadinessDetector()
+            Log.ui.info("模块[2/6] 视觉 = GestureDetector + PoseReadinessDetector + PersonSegmenter + FaceLandmarkDetector")
+        }
         segmenter = PersonSegmenter()
         landmarker = FaceLandmarkDetector()
-        Log.ui.info("模块[2/6] 视觉 = GestureDetector + PoseReadinessDetector + PersonSegmenter + FaceLandmarkDetector")
         // ③ 修图管线（注入人像分割 + 人脸关键点：换背景 / 搞怪装饰能力）
         imaging = ImagingService(segmenter: segmenter, landmarker: landmarker)
         Log.ui.info("模块[3/6] 修图 = ImagingService(segmenter:landmarker:)")
-        // ④ 打印队列（CUPS 后端）
-        printer = PrintService()
-        Log.ui.info("模块[4/6] 打印 = PrintService")
+        // ④ 打印队列（Mock 模式强制 Preview 后端：落 PDF 到 print-preview/ 不送打印机）
+        printer = PrintService(kind: isMock ? .preview : .cups)
+        Log.ui.info("模块[4/6] 打印 = PrintService(\(isMock ? "preview" : "cups"))")
         // ⑤ iPad Web 服务：同步读一遍配置文件快照（ConfigStore 是 actor 不能同步读，
         //    这里直接解码同一 config.json，数据一致；BoothWebService 构造时需要端口）
         let conf = Self.loadConfigSnapshot()

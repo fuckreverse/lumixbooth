@@ -13,8 +13,24 @@ import BoothCore
 
 public actor PrintService: PrintServing {
 
-    /// 打印后端（模块内部协议；生产 LPPrintBackend，测试 MockPrintBackend）
-    private let backend: any PrintBackend
+    /// 生产可选的打印后端种类（Preview = 演示 dry-run，落 PDF 不送打印机）
+    public enum BackendKind: String, Sendable {
+        case cups
+        case preview
+    }
+
+    /// 打印后端（模块内部协议；生产 LPPrintBackend，演示 PreviewPrintBackend，测试 MockPrintBackend）
+    private var backend: any PrintBackend
+
+    /// 构造时强制 Preview（App -mock 模式），不受 dryRun 配置热更新影响
+    private let forcePreview: Bool
+
+    /// Preview 后端工厂（测试可注入临时输出目录的版本）
+    private let previewFactory: @Sendable () -> any PrintBackend
+
+    /// 当前后端轨迹：internal 注入的后端只在明确需要切换时才被替换
+    private enum ActiveBackend { case injected, cups, preview }
+    private var activeBackend: ActiveBackend
 
     /// 打印配置快照（默认从 ConfigStore 加载，支持热更新）
     private var config: BoothConfig.PrintConf
@@ -35,29 +51,59 @@ public actor PrintService: PrintServing {
 
     // MARK: - 初始化
 
-    /// 生产入口：默认 CUPS lp 后端 + ConfigStore 配置
-    public init() {
-        self.backend = LPPrintBackend()
+    /// 生产入口：kind 选后端 + ConfigStore 配置
+    public init(kind: BackendKind = .cups) {
+        self.forcePreview = (kind == .preview)
+        self.previewFactory = { PreviewPrintBackend() }
+        self.backend = kind == .preview ? PreviewPrintBackend() : LPPrintBackend()
+        self.activeBackend = kind == .preview ? .preview : .cups
         self.config = BoothConfig.PrintConf()
         // 异步拉取真实配置（Actor init 不能 await；短暂用默认值，拉到后自动生效）
         Task { await self.reloadConfigFromStore() }
     }
 
     /// 测试/注入入口（internal：PrintBackend 是模块内部协议，不对外暴露）
-    init(backend: any PrintBackend, config: BoothConfig.PrintConf) {
+    init(backend: any PrintBackend, config: BoothConfig.PrintConf,
+         previewFactory: @Sendable @escaping () -> any PrintBackend = { PreviewPrintBackend() }) {
         self.backend = backend
+        self.forcePreview = false
+        self.previewFactory = previewFactory
+        self.activeBackend = .injected
         self.config = config
+        // 注入配置本身带 dryRun=true 时立即切到 Preview 后端
+        //（actor init 是 nonisolated 上下文，不能调 syncBackend()，这里内联等价逻辑）
+        if config.dryRun {
+            self.backend = previewFactory()
+            self.activeBackend = .preview
+        }
     }
 
     private func reloadConfigFromStore() async {
         config = await ConfigStore.shared.config.printing
-        Log.print.info("已从 ConfigStore 加载打印配置: printer=\(config.printerName.isEmpty ? "(系统默认)" : config.printerName) 默认份数=\(config.defaultCopies) 无边距=\(config.borderless)")
+        syncBackend()
+        Log.print.info("已从 ConfigStore 加载打印配置: printer=\(config.printerName.isEmpty ? "(系统默认)" : config.printerName) 默认份数=\(config.defaultCopies) 无边距=\(config.borderless) dryRun=\(config.dryRun)")
     }
 
     /// 配置热更新（操作员设置页改打印参数后调用）
     public func applyConfig(_ newConfig: BoothConfig.PrintConf) {
         config = newConfig
-        Log.print.info("打印配置已热更新: printer=\(newConfig.printerName.isEmpty ? "(系统默认)" : newConfig.printerName) 无边距=\(newConfig.borderless) 去重窗口=\(newConfig.dedupeWindowSec)s")
+        syncBackend()
+        Log.print.info("打印配置已热更新: printer=\(newConfig.printerName.isEmpty ? "(系统默认)" : newConfig.printerName) 无边距=\(newConfig.borderless) 去重窗口=\(newConfig.dedupeWindowSec)s dryRun=\(newConfig.dryRun)")
+    }
+
+    /// 按 forcePreview/dryRun 决定生效后端；只在目标种类与当前不同时切换，
+    /// 测试注入的后端（.injected）不会被 dryRun=false 的配置刷新误替换。
+    private func syncBackend() {
+        let wantPreview = forcePreview || config.dryRun
+        if wantPreview, activeBackend != .preview {
+            backend = previewFactory()
+            activeBackend = .preview
+            Log.print.info("打印后端 → PreviewPrintBackend（dry-run，输出 PDF 不送打印机）")
+        } else if !wantPreview, activeBackend == .preview, !forcePreview {
+            backend = LPPrintBackend()
+            activeBackend = .cups
+            Log.print.info("打印后端 → LPPrintBackend（CUPS lp）")
+        }
     }
 
     // MARK: - PrintServing 契约

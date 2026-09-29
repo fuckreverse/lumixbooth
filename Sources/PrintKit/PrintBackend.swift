@@ -20,6 +20,8 @@ enum PrintBackendError: Error, Sendable {
     case lpFailed(exitCode: Int32, stderr: String)
     /// 打印位图文件不存在（ImagingKit 产物被清理/移动等场景）
     case fileNotFound(String)
+    /// 预览后端 PDF 渲染失败（位图解码失败 / PDF 创建失败）
+    case previewFailed(String)
 }
 
 extension PrintBackendError: CustomStringConvertible {
@@ -30,6 +32,8 @@ extension PrintBackendError: CustomStringConvertible {
             return "lp 退出码 \(code)\(trimmed.isEmpty ? "" : ": \(trimmed)")"
         case .fileNotFound(let path):
             return "打印文件不存在: \(path)"
+        case .previewFailed(let reason):
+            return "预览 PDF 生成失败: \(reason)"
         }
     }
 }

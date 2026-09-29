@@ -443,17 +443,17 @@ enum PipelineCore {
         ctx.restoreGState()
     }
 
-    /// 绘制文字。CGContext 默认左下角原点，直接画 NSString 会上下颠倒，
-    /// 这里内部翻转坐标系，调用方一律使用"左上角原点"的坐标。
+    /// 绘制文字。调用方一律使用"左上角原点"的坐标。
+    /// 实测：CGBitmapContext→CGImage→JPEG→显示 保持 CG y-up 方向，
+    /// NSString 在 unflipped 上下文中直接画即为正立；
+    /// 历史上"翻转 CTM 再画"的做法与上下文假设叠加，产出的是倒立文字（mock 演示暴露）。
     static func drawText(_ text: NSAttributedString, topLeft point: CGPoint, in ctx: CGContext, canvas: CGSize) {
-        ctx.saveGState()
-        ctx.translateBy(x: 0, y: canvas.height)
-        ctx.scaleBy(x: 1, y: -1)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
-        text.draw(at: point)
+        // NSString.draw(at:) 在 y-up 空间以文字矩形左下角为锚点，换算出 y-up 坐标
+        let yUp = canvas.height - point.y - text.size().height
+        text.draw(at: CGPoint(x: point.x, y: yUp))
         NSGraphicsContext.restoreGraphicsState()
-        ctx.restoreGState()
     }
 }
 

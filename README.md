@@ -49,3 +49,26 @@ cam.close()
 - **错误处理**：每个 API 末位 `uint* err` 出参；`0x10000`=参数空，`0x40004`=LiveView 忙
 - **风险**：非公开 API，升级 LUMIX Tether 版本可能变签名；商用需评估 EULA
   （所有 PTP opcode 已还原，最坏可甩开此库自实现，见 ANALYSIS.md §3）
+
+## 无硬件演示（Mock 模式）
+
+不接相机/打印机也能演示完整 GUI 流程：
+
+```bash
+make run-mock       # 直接跑：合成相机 + 姿势/手势自动命中 + 打印落 PDF
+make run-mock-app   # 以 .app 形态跑（有 bundle id，可被自动化/辅助功能识别）
+make open-prints    # 打开 dry-run 打印的 PDF 输出目录
+```
+
+Mock 模式（启动参数 `-mock`）的行为：
+
+- **相机**：MockCameraService 产合成 LiveView 帧流与"成片"（渐变 + 帧号），支持延迟/失败注入
+- **视觉**：MockGestureDetector/MockReadinessDetector 恒定命中，空格/点击开始后自动走完
+  armed → gestureWait → countdown → capturing → processing → review 全链路，review 超时后
+  回到 idle 自动开启下一轮（无人值守循环演示）
+- **打印**：强制 PreviewPrintBackend，不触碰 CUPS；每次打印把 1200×1800 打印位图包成
+  N 页（N=份数）4×6 英寸 PDF 落到 `~/Library/Application Support/Booth/print-preview/`
+- **窗口标题**带 `[Mock]` 后缀，便于区分真机
+
+真机模式也能单独开打印 dry-run：操作员设置页 → 打印设置 → 「演示模式」开关
+（配置项 `printing.dryRun`，热更新即时生效；旁边有按钮直达 PDF 预览目录）。

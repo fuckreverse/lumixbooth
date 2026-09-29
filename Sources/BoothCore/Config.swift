@@ -139,6 +139,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var printingDwellSec = 3           // “打印中请稍候”提示停留时长（原硬编码 3s）
         public var printKeyEnabled = true         // 键盘 P 在 REVIEW 态触发打印（兜底）
         public var showPrintButton = true         // iPad REVIEW 页显示打印按钮（false=仅供 QR/重拍，操作员管控）
+        public var dryRun = false                 // 演示模式：不送打印机，输出 PDF 到 print-preview/
         public init() {}
 
         // 向后兼容解码：老配置缺新字段 → 默认值
@@ -146,6 +147,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             case printerName, defaultCopies, minCopies, maxCopies
             case paperWidthMM, paperHeightMM, borderless, dedupeWindowSec, printQuotaPerHour
             case printQRCode, autoPrintDelaySec, printingDwellSec, printKeyEnabled, showPrintButton
+            case dryRun
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -163,6 +165,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             printingDwellSec = try c.decodeIfPresent(Int.self, forKey: .printingDwellSec) ?? 3
             printKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .printKeyEnabled) ?? true
             showPrintButton = try c.decodeIfPresent(Bool.self, forKey: .showPrintButton) ?? true
+            dryRun = try c.decodeIfPresent(Bool.self, forKey: .dryRun) ?? false
         }
     }
 
