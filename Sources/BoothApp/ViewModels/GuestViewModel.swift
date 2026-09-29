@@ -46,6 +46,15 @@ final class GuestViewModel: ObservableObject {
     @Published private(set) var cameraState: CameraConnectionState = .disconnected
     @Published private(set) var mode: ShootMode = .collage(4)
     @Published private(set) var defaultCopies = 2
+    /// 拍后自选滤镜（REVIEW 态大屏选择条；跟随配置 filterSelection 开关）
+    @Published private(set) var filterSelection = true
+    @Published private(set) var currentFilter: PhotoFilter = .none
+    /// 操作员用 P 键触发打印（printKeyEnabled 开关）
+    @Published private(set) var printKeyEnabled = true
+    /// 大屏是否显示打印按钮（showPrintButton 开关；关闭时仅 iPad / P 键可打印）
+    @Published private(set) var showPrintButton = true
+    /// IDLE 背景历史成片轮播开关
+    @Published private(set) var idleSlideshow = true
 
     let liveView = LiveViewStore()
 
@@ -77,6 +86,10 @@ final class GuestViewModel: ObservableObject {
                 default:
                     break
                 }
+                // REVIEW 态同步当前滤镜（大屏选择条高亮与状态机一致）
+                if case .review = s {
+                    Task { self.currentFilter = await self.coordinator.currentFilter }
+                }
             }
         })
 
@@ -104,7 +117,12 @@ final class GuestViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             self.mode = await self.coordinator.mode
-            self.defaultCopies = await ConfigStore.shared.config.printing.defaultCopies
+            let cfg = await ConfigStore.shared.config
+            self.defaultCopies = cfg.printing.defaultCopies
+            self.filterSelection = cfg.imaging.filterSelection
+            self.printKeyEnabled = cfg.printing.printKeyEnabled
+            self.showPrintButton = cfg.printing.showPrintButton
+            self.idleSlideshow = cfg.capture.idleSlideshow
         }
     }
 
@@ -136,5 +154,12 @@ final class GuestViewModel: ObservableObject {
         mode = newMode // 先本地高亮，状态机接受与否以下次刷新为准
         Task { await coordinator.setMode(newMode) }
         Log.ui.info("宾客选择模式：\(newMode.kind.rawValue)×\(newMode.shots)")
+    }
+
+    /// REVIEW 态换滤镜（大屏选择条；状态机重打成片后推新 review 状态）
+    func selectFilter(_ filter: PhotoFilter) {
+        currentFilter = filter // 先本地高亮
+        Task { await coordinator.selectFilter(filter) }
+        Log.ui.info("宾客选择滤镜：\(filter.displayName)")
     }
 }

@@ -139,7 +139,7 @@ enum PipelineCore {
     // MARK: - ⑤ 排版输出
 
     /// 单张模式：横构图照片（3:2）裁切填充竖版 6 寸（2:3）。
-    /// "智能居中裁切"：按覆盖缩放后取画面中心区域 —— 拍照亭场景人站画面中央，
+    /// “智能居中裁切”：按覆盖缩放后取画面中心区域 —— 拍照亭场景人站画面中央，
     /// 中心裁切命中率最高；后续如接入人脸检测可在此微调裁切偏移。
     static func composeSingle(_ photo: CGImage) throws -> CGImage {
         let ctx = makeBitmapContext(size: printSize)
@@ -149,28 +149,38 @@ enum PipelineCore {
         return try makeImage(from: ctx)
     }
 
-    /// 拼版模式：N 张照片竖向等分排列成 1200×1800 大头贴条。
+    /// 拼版模式：多布局排版成 1200×1800 大头贴（PhotoBoothProject 经典 collage 形态）。
+    /// 布局网格由 CollageLayout 决定：strip=N 格纵列（行数随张数）、grid2x2=2×2、duo=1×2。
     /// 布局：四周 40px 白边，格间距 24px，底部 160px 品牌条（mascot + 日期 + Photobooth 字样），
     /// 品牌条与最后一格之间留 24px。
-    static func composeCollage(photos: [CGImage], themeDir: URL, accent: NSColor?, dateText: String) throws -> CGImage {
+    static func composeCollage(photos: [CGImage],
+                               layout: CollageLayout,
+                               themeDir: URL,
+                               accent: NSColor?,
+                               dateText: String) throws -> CGImage {
         let canvas = printSize
         let ctx = makeBitmapContext(size: canvas)
         // 白底
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         ctx.fill(CGRect(origin: .zero, size: canvas))
 
-        let n = photos.count
+        let n = max(1, photos.count)
         let outer: CGFloat = 40
         let gap: CGFloat = 24
         let brandH: CGFloat = 160
-        let cellW = canvas.width - outer * 2
-        let cellH = (canvas.height - outer * 2 - brandH - gap - gap * CGFloat(n - 1)) / CGFloat(n)
+        let cols = max(1, layout.columns)
+        let rows = layout == .strip ? n : max(1, (n + cols - 1) / cols)
+        let cellW = (canvas.width - outer * 2 - gap * CGFloat(cols - 1)) / CGFloat(cols)
+        let cellH = (canvas.height - outer * 2 - brandH - gap - gap * CGFloat(rows - 1)) / CGFloat(rows)
 
-        // CGContext 原点在左下角，自上而下排格需换算 y
+        // CGContext 原点在左下角，自上而下、从左到右排格需换算 y
         for (i, p) in photos.enumerated() {
-            let topFromTop = outer + CGFloat(i) * (cellH + gap)
+            let col = CGFloat(i % cols)
+            let row = CGFloat(i / cols)
+            let topFromTop = outer + row * (cellH + gap)
+            let x = outer + col * (cellW + gap)
             let y = canvas.height - topFromTop - cellH
-            drawFill(p, in: CGRect(x: outer, y: y, width: cellW, height: cellH), ctx: ctx)
+            drawFill(p, in: CGRect(x: x, y: y, width: cellW, height: cellH), ctx: ctx)
         }
 
         // 品牌条背景：主题 accent 色，无主题素材则浅灰兜底
@@ -211,6 +221,101 @@ enum PipelineCore {
         drawText(date, topLeft: datePoint, in: ctx, canvas: canvas)
 
         return try makeImage(from: ctx)
+    }
+
+    // MARK: - ⑤b 拍后自选滤镜（PhotoBoothProject 借鉴）
+
+    /// 风格化滤镜：全部基于系统 CoreImage 滤镜链，无第三方依赖。
+    /// .none 直接返回原图（零拷贝路径）。
+    /// 所有 setValue 前检查 inputKeys（写错键名 CoreImage 抛 ObjC 异常接不住）。
+    static func applyStyleFilter(_ image: CGImage, filter: PhotoFilter, ctx: CIContext) throws -> CGImage {
+        guard filter != .none else { return image }
+        let input = CIImage(cgImage: image)
+        var output = input
+
+        func chain(_ name: String, _ apply: (CIFilter) -> Void) {
+            guard let f = CIFilter(name: name), f.inputKeys.contains(kCIInputImageKey) else { return }
+            f.setValue(output, forKey: kCIInputImageKey)
+            apply(f)
+            if let out = f.outputImage { output = out }
+        }
+
+        switch filter {
+        case .none:
+            return image
+        case .vivid:
+            chain("CIColorControls") { f in
+                if f.inputKeys.contains("inputSaturation") { f.setValue(1.35, forKey: "inputSaturation") }
+                if f.inputKeys.contains(kCIInputContrastKey) { f.setValue(1.08, forKey: kCIInputContrastKey) }
+            }
+            chain("CIVibrance") { f in
+                if f.inputKeys.contains(kCIInputAmountKey) { f.setValue(0.6, forKey: kCIInputAmountKey) }
+            }
+        case .warm:
+            chain("CITemperatureAndTint") { f in
+                if f.inputKeys.contains("inputNeutral") {
+                    f.setValue(CIVector(x: 6500, y: 3000), forKey: "inputNeutral")
+                }
+                if f.inputKeys.contains("inputTarget") {
+                    f.setValue(CIVector(x: 7800, y: 3100), forKey: "inputTarget")
+                }
+            }
+        case .cool:
+            chain("CITemperatureAndTint") { f in
+                if f.inputKeys.contains("inputNeutral") {
+                    f.setValue(CIVector(x: 6500, y: 3000), forKey: "inputNeutral")
+                }
+                if f.inputKeys.contains("inputTarget") {
+                    f.setValue(CIVector(x: 5200, y: 2900), forKey: "inputTarget")
+                }
+            }
+        case .mono:
+            chain("CIPhotoEffectMono") { _ in }
+        case .nostalgia:
+            chain("CIPhotoEffectTransfer") { _ in }
+            chain("CIVignette") { f in
+                if f.inputKeys.contains("inputIntensity") { f.setValue(0.35, forKey: "inputIntensity") }
+                if f.inputKeys.contains("inputRadius") { f.setValue(1.2, forKey: "inputRadius") }
+            }
+        }
+        return try render(output.cropped(to: input.extent), ctx: ctx)
+    }
+
+    // MARK: - ⑤c 打印 QR 叠印（PhotoBoothProject 借鉴：成片上印 QR 供扫码下载电子版）
+
+    /// 在成片右缘垂直居中位置叠印 QR 码（白底圆角垫板 + 黑码点）。
+    /// 避开右下角日期水印与拼版底部品牌条。
+    static func overlayQRCode(on base: CGImage, content: String, side: CGFloat = 190, ctx: CIContext) throws -> CGImage {
+        let size = CGSize(width: base.width, height: base.height)
+        let c = makeBitmapContext(size: size)
+        c.draw(base, in: CGRect(origin: .zero, size: size))
+
+        // 生成 QR（CIQRCodeGenerator 输出小图，按目标边长等比放大）
+        guard let qr = CIFilter(name: "CIQRCodeGenerator") else {
+            throw BoothError.imagingFailed("CIQRCodeGenerator 不可用")
+        }
+        qr.setValue(Data(content.utf8), forKey: "inputMessage")
+        guard let small = qr.outputImage else {
+            throw BoothError.imagingFailed("QR 码生成失败（内容过长？）")
+        }
+        let scale = side / max(small.extent.width, 1)
+        let scaled = small.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let qrCG = ctx.createCGImage(scaled, from: scaled.extent) else {
+            throw BoothError.imagingFailed("QR 码渲染失败")
+        }
+
+        // 白底圆角垫板（码点直接压照片可读性差）
+        let pad: CGFloat = 14
+        let margin: CGFloat = 26
+        let total = side + pad * 2
+        let rect = CGRect(x: size.width - total - margin, y: (size.height - total) / 2,
+                          width: total, height: total)
+        c.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        let path = CGPath(roundedRect: rect, cornerWidth: 16, cornerHeight: 16, transform: nil)
+        c.addPath(path)
+        c.fillPath()
+        c.draw(qrCG, in: rect.insetBy(dx: pad, dy: pad))
+        return try makeImage(from: c)
     }
 
     // MARK: - ⑥ 边框 / 水印

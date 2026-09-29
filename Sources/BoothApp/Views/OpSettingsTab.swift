@@ -79,6 +79,30 @@ struct OpSettingsTab: View {
                 }
 
                 HStack {
+                    label("拼版布局")
+                    // 拼版默认布局（经典拼条 / 四宫格 / 双格大图）
+                    Picker("", selection: Binding<CollageLayout>(
+                        get: { vm.config.capture.defaultMode.layout },
+                        set: { layout in vm.update {
+                            if $0.capture.defaultMode.kind == .collage {
+                                $0.capture.defaultMode = .collage($0.capture.defaultMode.shots, layout: layout)
+                            }
+                        } }
+                    )) {
+                        ForEach(CollageLayout.allCases, id: \.rawValue) { l in
+                            Text(l.displayName).tag(l)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
+                }
+
+                Toggle("连拍不中断（拼版仅首张倒计时）",
+                       isOn: bind(\.capture.continuousCollage))
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+
+                HStack {
                     label("REVIEW 超时")
                     Stepper("\(vm.config.capture.reviewTimeoutSec) 秒",
                             value: bind(\.capture.reviewTimeoutSec), in: 10...300, step: 10)
@@ -88,6 +112,17 @@ struct OpSettingsTab: View {
                        isOn: bind(\.capture.autoPrintOnTimeout))
                     .font(theme.bodyFont(17))
                     .foregroundStyle(theme.textColor)
+
+                Toggle("待机屏历史成片轮播",
+                       isOn: bind(\.capture.idleSlideshow))
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+
+                HStack {
+                    label("轮播间隔")
+                    Stepper("\(vm.config.capture.idleSlideshowSec) 秒",
+                            value: bind(\.capture.idleSlideshowSec), in: 2...30)
+                }
             }
         }
     }
@@ -102,6 +137,28 @@ struct OpSettingsTab: View {
                     label("默认打印份数")
                     Stepper("\(vm.config.printing.defaultCopies) 份",
                             value: bind(\.printing.defaultCopies), in: 1...4)
+                }
+                Toggle("成片边缘印二维码（扫码存电子版）",
+                       isOn: bind(\.printing.printQRCode))
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+                Toggle("大屏显示打印按钮（关则仅 iPad / P 键可打印）",
+                       isOn: bind(\.printing.showPrintButton))
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+                Toggle("P 键触发打印（操作员兜底通道）",
+                       isOn: bind(\.printing.printKeyEnabled))
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+                HStack {
+                    label("超时自动打印延迟")
+                    Stepper("\(vm.config.printing.autoPrintDelaySec) 秒",
+                            value: bind(\.printing.autoPrintDelaySec), in: 0...30)
+                }
+                HStack {
+                    label("“打印中”停留时长")
+                    Stepper("\(vm.config.printing.printingDwellSec) 秒",
+                            value: bind(\.printing.printingDwellSec), in: 0...15)
                 }
             }
         }
@@ -118,6 +175,17 @@ struct OpSettingsTab: View {
                 Toggle("人像换背景（需主题带 background.png）", isOn: bind(\.imaging.replaceBackground))
                 Toggle("边框 / 相框", isOn: bind(\.imaging.frame))
                 Toggle("日期水印", isOn: bind(\.imaging.dateWatermark))
+                Toggle("拍后自选滤镜（REVIEW 选择条）", isOn: bind(\.imaging.filterSelection))
+
+                HStack {
+                    label("默认滤镜")
+                    Picker("", selection: bind(\.imaging.defaultFilter)) {
+                        ForEach(PhotoFilter.allCases, id: \.rawValue) { f in
+                            Text("\(f.emoji) \(f.displayName)").tag(f)
+                        }
+                    }
+                    .frame(width: 260)
+                }
 
                 HStack {
                     label("主题名")

@@ -238,4 +238,151 @@ final class BoothServerTests: XCTestCase {
         _ = try await withTimeout { try await client.read(2) }
         return (header, body)
     }
+
+    // MARK: - filter 指令 + 新路由（PhotoBoothProject 借鉴）
+
+    /// WS 指令上行：filter / mode 带 layout
+    func testFilterAndModeLayoutCommands() async throws {
+        let server = BoothWebService(conf: makeConf())
+        try await server.start()
+        defer { Task { await server.stop() } }
+
+        actor CmdBox {
+            var items: [iPadCommand] = []
+            func add(_ c: iPadCommand) { items.append(c) }
+            var all: [iPadCommand] { items }
+        }
+        let box = CmdBox()
+        let pump = Task { for await c in server.commands { await box.add(c) } }
+        defer { pump.cancel() }
+
+        let client = RawTCPClient(port: server.port)
+        try await client.connect()
+
+        // /ws 握手
+        let key = "dGhlIHNhbXBsZSBub25jZQ=="
+        let request = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+            + "Connection: Upgrade\r\nSec-WebSocket-Key: \(key)\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        client.send(Data(request.utf8))
+        _ = String(decoding: try await withTimeout {
+            try await client.read(until: Data("\r\n\r\n".utf8))
+        }, as: UTF8.self)
+
+        // filter 指令：合法值直传，非法值安全回退 none
+        client.send(TestWS.maskedFrame(opcode: 0x1, payload: Data(#"{"type":"filter","filter":"vivid"}"#.utf8)))
+        try await waitUntil { await box.all.count >= 1 }
+        var all = await box.all
+        XCTAssertEqual(all.first, .selectFilter(.vivid))
+
+        client.send(TestWS.maskedFrame(opcode: 0x1, payload: Data(#"{"type":"filter","filter":"no-such"}"#.utf8)))
+        try await waitUntil { await box.all.count >= 2 }
+        all = await box.all
+        XCTAssertEqual(all.count >= 2 ? all[1] : nil, .selectFilter(.none), "非法滤镜名应安全回退 .none")
+
+        // mode 指令带 layout
+        client.send(TestWS.maskedFrame(opcode: 0x1,
+                                        payload: Data(#"{"type":"mode","kind":"collage","shots":4,"layout":"grid2x2"}"#.utf8)))
+        try await waitUntil { await box.all.count >= 3 }
+        all = await box.all
+        XCTAssertEqual(all.count >= 3 ? all[2] : nil, .selectMode(.collage(4, layout: .grid2x2)))
+
+        await server.stop()
+    }
+
+    /// /gallery /slideshow 页面 + review 状态广播携带 filters/showPrint
+    func testGallerySlideshowPagesAndReviewPayload() async throws {
+        var conf = makeConf()
+        conf.printing.showPrintButton = false
+        let server = BoothWebService(conf: conf)
+        try await server.start()
+        let port = server.port
+        defer { Task { await server.stop() } }
+
+        // /gallery：HTML 且带相册标题
+        let (galleryData, galleryResp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/gallery")!)
+        XCTAssertEqual((galleryResp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertTrue(String(decoding: galleryData, as: UTF8.self).contains("相册"))
+
+        // /slideshow：HTML 且注入了配置的轮播间隔
+        let (slideshowData, slideshowResp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/slideshow")!)
+        XCTAssertEqual((slideshowResp as? HTTPURLResponse)?.statusCode, 200)
+        let slideshowHTML = String(decoding: slideshowData, as: UTF8.self)
+        XCTAssertTrue(slideshowHTML.contains("放映"))
+        XCTAssertTrue(slideshowHTML.contains("INTERVAL"), "放映页应注入轮播间隔")
+
+        // review 状态广播：带 showPrint=false + filters 列表
+        let client = RawTCPClient(port: port)
+        try await client.connect()
+        let key = "dGhlIHNhbXBsZSBub25jZQ=="
+        let request = "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+            + "Connection: Upgrade\r\nSec-WebSocket-Key: \(key)\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        client.send(Data(request.utf8))
+        _ = String(decoding: try await withTimeout {
+            try await client.read(until: Data("\r\n\r\n".utf8))
+        }, as: UTF8.self)
+
+        let jpeg = try makeTempJPEG()
+        defer { try? FileManager.default.removeItem(at: jpeg.url) }
+        let photo = ProcessedPhoto(id: UUID(), printFile: jpeg.url, displayFile: jpeg.url, originals: [jpeg.url])
+        await server.broadcast(state: .review(photo))
+        let frame = try await withTimeout { try await TestWS.readServerFrame(client) }
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: frame.payload) as? [String: Any])
+        XCTAssertEqual(obj["showPrint"] as? Bool, false, "应携带打印按钮可见性开关")
+        let filters = try XCTUnwrap(obj["filters"] as? [[String: Any]])
+        XCTAssertFalse(filters.isEmpty, "filterSelection 默认开启应携带滤镜列表")
+        XCTAssertTrue(filters.contains { ($0["id"] as? String) == "vivid" })
+
+        client.send(TestWS.maskedFrame(opcode: 0x8, payload: Data([0x03, 0xE8])))
+        await server.stop()
+    }
+
+    /// /api/photos 列表 + /photo/history/{date}/{session} 历史成片 + 路径穿越防护
+    func testHistoryPhotosAPI() async throws {
+        // 在真实 sessions 根下造一个临时会话（服务扫的就是 BoothPaths.sessionsDir）
+        let fm = FileManager.default
+        let day = "2099-12-31"
+        let session = "235959-zztest"
+        let sessionDir = BoothPaths.sessionsDir.appendingPathComponent(day, isDirectory: true)
+            .appendingPathComponent(session, isDirectory: true)
+        try fm.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: BoothPaths.sessionsDir.appendingPathComponent(day, isDirectory: true)) }
+        // 历史成片展示图
+        let jpeg = try makeTempJPEG()
+        defer { try? fm.removeItem(at: jpeg.url) }
+        try fm.copyItem(at: jpeg.url, to: sessionDir.appendingPathComponent("display.jpg"))
+
+        let server = BoothWebService(conf: makeConf())
+        try await server.start()
+        let port = server.port
+        defer { Task { await server.stop() } }
+
+        // /api/photos：应列出刚造的会话
+        let (listData, listResp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/api/photos")!)
+        XCTAssertEqual((listResp as? HTTPURLResponse)?.statusCode, 200)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: listData) as? [String: Any])
+        let photos = try XCTUnwrap(obj["photos"] as? [[String: Any]])
+        XCTAssertTrue(photos.contains {
+            ($0["date"] as? String) == day && ($0["session"] as? String) == session
+        }, "列表应包含测试会话，实际: \(photos)")
+
+        // 历史成片下载：字节一致
+        let (photoData, photoResp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/photo/history/\(day)/\(session)")!)
+        XCTAssertEqual((photoResp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual((photoResp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"), "image/jpeg")
+        XCTAssertEqual(photoData, jpeg.data, "历史成片字节应与磁盘一致")
+
+        // 路径穿越防护：目录段带 .. 或多余段 → 404
+        let (_, traversalResp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/photo/history/..%2F..%2Fetc/passwd")!)
+        XCTAssertEqual((traversalResp as? HTTPURLResponse)?.statusCode, 404, "路径穿越应被拒绝")
+        let (_, extraResp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/photo/history/\(day)/\(session)/extra")!)
+        XCTAssertEqual((extraResp as? HTTPURLResponse)?.statusCode, 404, "多余路径段应被拒绝")
+
+        await server.stop()
+    }
 }

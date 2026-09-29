@@ -237,10 +237,12 @@ struct RootView: View {
         .background(theme.backgroundColor.ignoresSafeArea())
         .focusable()
         .focusEffectDisabled()
-        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，Esc=操作员页往返
+        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，P=打印（操作员），Esc=操作员页往返
         .onKeyPress(.space) { guestVM.triggerStart(); return .handled }
         .onKeyPress(KeyEquivalent("r")) { guestVM.retake(); return .handled }
         .onKeyPress(KeyEquivalent("R")) { guestVM.retake(); return .handled }
+        .onKeyPress(KeyEquivalent("p")) { handlePrintKey(); return .handled }
+        .onKeyPress(KeyEquivalent("P")) { handlePrintKey(); return .handled }
         .onKeyPress(.escape) { toggleOperatorPage(); return .handled }
         .task { guestVM.start() }
     }
@@ -256,6 +258,13 @@ struct RootView: View {
             composition.showingOperator = true
             Log.ui.info("进入操作员页")
         }
+    }
+
+    /// P 键打印（PhotoBoothProject 借鉴）：操作员兜底打印通道，配置可关
+    private func handlePrintKey() {
+        guard guestVM.printKeyEnabled else { return }
+        Log.ui.info("P 键触发打印")
+        guestVM.confirmPrint()
     }
 }
 

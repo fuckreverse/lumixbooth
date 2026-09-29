@@ -8,9 +8,12 @@ import Foundation
 //    大圆角 / 大字号，全中文可爱风
 //  - WS 协议（与 BoothWebService 对应）：
 //     收 {"type":"state","state":"...","secondsLeft":n,"shot":n,"of":n,
-//          "photoId":"uuid","copies":n,"message":"..."}
+//          "photoId":"uuid","copies":n,"message":"...",
+//          "showPrint":bool,"filters":[{"id":"vivid","name":"鲜艳"}]}
 //     发 {"type":"print","copies":n} / {"type":"retake"} /
-//         {"type":"mode","kind":"single"|"collage","shots":n}
+//         {"type":"mode","kind":"single"|"collage","shots":n,"layout":"strip"} /
+//         {"type":"filter","filter":"vivid"}
+//  - /gallery /slideshow：独立相册页 / 放映页（不连 WS，纯拉 /api/photos）
 // ============================================================
 
 enum WebAssets {
@@ -82,6 +85,18 @@ enum WebAssets {
                       padding:16px 26px; font-size:20px; font-weight:600; cursor:pointer; }
           .mode-btn.on { background:var(--peach); color:#fff; box-shadow:0 10px 24px rgba(255,143,171,.45); }
 
+          /* REVIEW 滤镜选择条（拍后自选） */
+          .filter-row { display:flex; gap:12px; margin-top:22px; justify-content:center; flex-wrap:wrap; }
+          .filter-btn { background:#fff; border:3px solid #F3D9D2; color:var(--ink); border-radius:999px;
+                        padding:12px 24px; font-size:19px; font-weight:600; cursor:pointer; }
+          .filter-btn.on { border-color:var(--peach); color:var(--peach);
+                           box-shadow:0 8px 18px rgba(255,143,171,.35); }
+
+          /* 待机页底部入口（相册 / 放映） */
+          .links { position:fixed; bottom:16px; left:0; right:0; text-align:center; font-size:17px; }
+          .links a { color:var(--peach); text-decoration:none; font-weight:700; margin:0 12px;
+                     -webkit-touch-callout:none; }
+
           .fail { background:#FFE3E3; color:#C0392B; border-radius:24px; padding:26px 38px; font-size:24px; }
         </style>
         </head>
@@ -90,9 +105,11 @@ enum WebAssets {
           <header>LUMIX 拍照屋</header>
           <div id="livebox"><img id="liveimg" alt="实时取景" src="/live"></div>
           <main><div class="card" id="stage"></div></main>
+          <div class="links"><a href="/gallery">📖 相册</a><a href="/slideshow">🎞️ 放映</a></div>
 
         <script>
         var ws = null, cur = null, copies = 2, modeKind = 'collage', takeTimer = null;
+        var filters = null, curFilter = 'none', showPrint = true;
 
         var dot     = document.getElementById('dot');
         var stage   = document.getElementById('stage');
@@ -141,6 +158,9 @@ enum WebAssets {
           }
           if (s === 'review' && m.photoId) {
             copies = m.copies || 2;
+            if (m.filters) { filters = m.filters; }
+            if (typeof m.showPrint === 'boolean') { showPrint = m.showPrint; }
+            if (cur !== 'review') { curFilter = 'none'; }   // 新一轮流程回到原片
             renderReview(m.photoId);
             return;
           }
@@ -190,19 +210,44 @@ enum WebAssets {
           syncModeButtons();
         }
 
-        // REVIEW：全屏成片 + 张数步进器（1-4）+ 打印 / 重拍
+        // REVIEW：全屏成片 + 滤镜选择条（可选）+ 张数步进器（1-4）+ 打印 / 重拍
+        // 换滤镜后服务端会推新 review 状态（新 photoId），img 自然换图不落浏览器缓存
         function renderReview(photoId) {
-          stage.innerHTML =
-            '<img class="photo" src="/photo/' + photoId + '">' +
-            '<div class="controls">' +
-              '<div class="stepper">' +
+          var filterRow = '';
+          if (filters && filters.length) {
+            filterRow = '<div class="filter-row">' + filters.map(function (f) {
+              return '<button class="filter-btn' + (f.id === curFilter ? ' on' : '') +
+                     '" data-filter="' + f.id + '">' + f.name + '</button>';
+            }).join('') + '</div>';
+          }
+          var printControls = showPrint
+            ? '<div class="stepper">' +
                 '<button id="cop-minus">−</button>' +
                 '<span class="num" id="cop-num">' + copies + '</span><span class="unit">张</span>' +
                 '<button id="cop-plus">＋</button>' +
               '</div>' +
-              '<button class="btn btn-peach" id="btn-print">打印 🖨️</button>' +
+              '<button class="btn btn-peach" id="btn-print">打印 🖨️</button>'
+            : '';
+          stage.innerHTML =
+            '<img class="photo" src="/photo/' + photoId + '?t=' + Date.now() + '">' +
+            filterRow +
+            '<div class="controls">' +
+              printControls +
               '<button class="btn btn-ghost" id="btn-retake">重拍 🔄</button>' +
             '</div>';
+        }
+
+        function pickFilter(id) {
+          if (id === curFilter) return;
+          curFilter = id;
+          send({ type: 'filter', filter: id });
+          syncFilterButtons();
+        }
+        function syncFilterButtons() {
+          var btns = stage.querySelectorAll('.filter-btn');
+          for (var i = 0; i < btns.length; i++) {
+            btns[i].classList.toggle('on', btns.dataset.filter === curFilter);
+          }
         }
 
         // 打印完成后：请取照片（8s 后自动回待机）
@@ -223,6 +268,7 @@ enum WebAssets {
           var b = ev.target.closest('button');
           if (!b) return;
           if (b.dataset.kind) { pickMode(b.dataset.kind); return; }
+          if (b.dataset.filter) { pickFilter(b.dataset.filter); return; }
           if (b.id === 'cop-minus') { copies = Math.max(1, copies - 1); }
           if (b.id === 'cop-plus')  { copies = Math.min(4, copies + 1); }
           if (b.id === 'cop-minus' || b.id === 'cop-plus') {
@@ -240,4 +286,157 @@ enum WebAssets {
         </body>
         </html>
         """#
+
+    /// 相册页通用骨架（gallery / slideshow 共用样式，gallery 用瀑布流网格）
+    private static func pageShell(title: String, bodyHTML: String, script: String) -> String {
+        #"""
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <title>\#(title)</title>
+        <style>
+          :root { --peach:#FF8FAB; --cream:#FFF7F0; --ink:#5B4A4F; }
+          * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none;
+              -webkit-tap-highlight-color:transparent; }
+          html, body { height:100%; }
+          body {
+            background:var(--cream); color:var(--ink);
+            font-family:-apple-system,"PingFang SC","Hiragino Sans GB",sans-serif;
+            display:flex; flex-direction:column;
+          }
+          header { padding:18px 24px 10px; text-align:center; font-size:22px; font-weight:700;
+                   letter-spacing:3px; }
+          header a { color:var(--peach); text-decoration:none; font-size:17px; font-weight:700;
+                     display:inline-block; margin-top:6px; }
+          main { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+          .empty { text-align:center; padding:80px 20px; font-size:22px; opacity:.6; }
+          .empty .emoji { font-size:80px; display:block; margin-bottom:14px; }
+        </style>
+        </head>
+        <body>
+          <header>\#(title)<br><a href="/">← 回拍照确认屏</a></header>
+          <main>\#(bodyHTML)</main>
+        <script>
+        \#(script)
+        </script>
+        </body>
+        </html>
+        """#
+    }
+
+    /// 拉取 /api/photos 历史成片列表（失败返回空数组，页面显示空态）
+    private static let fetchScript = #"""
+        function fetchPhotos() {
+          return fetch('/api/photos').then(function (r) { return r.json(); })
+            .then(function (d) { return d.photos || []; })
+            .catch(function () { return []; });
+        }
+        """#
+
+    /// iPad 独立相册页：两列瀑布流，点图全屏查看（长按可保存）
+    static let galleryHTML: String = pageShell(
+        title: "📷 LUMIX 相册",
+        bodyHTML: #"""
+        <div id="grid"></div>
+        <div class="empty" id="empty" style="display:none">
+          <span class="emoji">📭</span>还没有成片，拍一张就有了
+        </div>
+        <style>
+          #grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; padding:14px; }
+          #grid img { width:100%; display:block; border-radius:18px; border:6px solid #fff;
+                      box-shadow:0 8px 22px rgba(91,74,79,.18); }
+          #lightbox { position:fixed; inset:0; background:rgba(91,74,79,.92); display:none;
+                      align-items:center; justify-content:center; z-index:9; }
+          #lightbox img { max-width:94vw; max-height:92vh; border-radius:24px;
+                          border:8px solid #fff; }
+        </style>
+        <div id="lightbox"><img id="lightbox-img" alt="成片大图"></div>
+        """#,
+        script: #"""
+        var grid = document.getElementById('grid');
+        var lightbox = document.getElementById('lightbox');
+        var lightboxImg = document.getElementById('lightbox-img');
+
+        function render(photos) {
+          if (!photos.length) {
+            document.getElementById('empty').style.display = 'block';
+            return;
+          }
+          grid.innerHTML = photos.map(function (p) {
+            return '<img src="' + p.url + '" loading="lazy" data-full="' + p.url + '" alt="成片">';
+          }).join('');
+        }
+
+        grid.addEventListener('click', function (ev) {
+          if (ev.target.tagName !== 'IMG') return;
+          lightboxImg.src = ev.target.dataset.full;
+          lightbox.style.display = 'flex';
+        });
+        lightbox.addEventListener('click', function () { lightbox.style.display = 'none'; });
+
+        fetchPhotos().then(render);
+        setTimeout(function () { fetchPhotos().then(render); }, 60000);
+        """# + fetchScript)
+
+    /// iPad 独立放映页：全屏轮播历史成片（点击暂停/继续，秒间隔跟随服务端配置注入）
+    static func slideshowHTML(intervalSec: Int) -> String {
+        pageShell(
+            title: "🎞️ LUMIX 放映",
+            bodyHTML: #"""
+            <div id="slide"></div>
+            <div class="empty" id="empty" style="display:none">
+              <span class="emoji">📭</span>还没有成片可放映
+            </div>
+            <style>
+              #slide { display:none; align-items:center; justify-content:center; height:100%; }
+              #slide img { max-width:96vw; max-height:88vh; border-radius:28px;
+                           border:10px solid #fff; box-shadow:0 18px 60px rgba(91,74,79,.35); }
+              #pause { position:fixed; bottom:22px; left:0; right:0; text-align:center;
+                       font-size:16px; opacity:.55; }
+            </style>
+            <div id="slide"><img id="slide-img" alt="放映"></div>
+            <div id="pause">点击屏幕 暂停 / 继续</div>
+            """#,
+            script: #"""
+            var INTERVAL = \#(max(2, intervalSec)) * 1000;
+            var slide = document.getElementById('slide');
+            var slideImg = document.getElementById('slide-img');
+            var photos = [], idx = 0, timer = null, paused = false;
+
+            function show() {
+              if (!photos.length) return;
+              idx = (idx + 1) % photos.length;
+              slideImg.src = photos[idx].url;
+            }
+
+            function start() {
+              if (timer || !photos.length) return;
+              slideImg.src = photos[0].url;
+              slide.style.display = 'flex';
+              timer = setInterval(show, INTERVAL);
+            }
+
+            function stop() { clearInterval(timer); timer = null; }
+
+            document.body.addEventListener('click', function () {
+              if (!photos.length) return;
+              paused = !paused;
+              if (paused) { stop(); } else { start(); }
+            });
+
+            fetchPhotos().then(function (list) {
+              photos = list;
+              if (photos.length) { start(); }
+              else { document.getElementById('empty').style.display = 'block'; }
+            });
+            setTimeout(function () {
+              fetchPhotos().then(function (list) {
+                if (list.length && !photos.length) { photos = list; start(); }
+              });
+            }, 60000);
+            """# + fetchScript)
+    }
 }

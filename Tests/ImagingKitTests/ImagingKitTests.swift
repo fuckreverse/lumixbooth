@@ -267,4 +267,134 @@ final class ImagingKitTests: XCTestCase {
         CGImageDestinationFinalize(dest)
         return data as Data
     }
+
+    // MARK: - 拍后自选滤镜（PhotoBoothProject 借鉴）
+
+    /// process 应额外落盘 print-base.jpg（未滤镜未边框底图），applyFilter 换滤镜重打成功
+    func testProcessWritesBaseAndApplyFilterReprints() async throws {
+        let sessionDir = makeTempDir()
+        let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
+        let original = try await service.process(originals: [makeCapture(1)], mode: .single, sessionDir: sessionDir)
+
+        // print-base.jpg 应落盘并挂到成片上
+        let base = sessionDir.appendingPathComponent("print-base.jpg")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: base.path), "应落盘 print-base.jpg")
+        XCTAssertEqual(original.baseFile, base)
+
+        // 换滤镜重打：新 id、覆写 print/display、base 保持
+        let vivid = try await service.applyFilter(.vivid, to: original, sessionDir: sessionDir)
+        XCTAssertNotEqual(vivid.id, original.id, "重打应生成新成片 id（iPad 端避缓存换图）")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: vivid.printFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: vivid.displayFile.path))
+        XCTAssertEqual(imageSize(vivid.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(vivid.baseFile, base)
+
+        // 再换一次滤镜仍然成功（base 可反复重打）
+        let mono = try await service.applyFilter(.mono, to: vivid, sessionDir: sessionDir)
+        XCTAssertNotEqual(mono.id, vivid.id)
+        XCTAssertEqual(imageSize(mono.printFile), CGSize(width: 1200, height: 1800))
+    }
+
+    /// 旧会话无 print-base.jpg（baseFile=nil）：applyFilter 降级返回原成片
+    func testApplyFilterDegradesWithoutBase() async throws {
+        let sessionDir = makeTempDir()
+        // 手造一个“旧会话”成片：只有 print.jpg，没有 base
+        let oldPrint = sessionDir.appendingPathComponent("print.jpg")
+        try makePNG(size: CGSize(width: 1200, height: 1800), color: NSColor.white).write(to: oldPrint)
+        let photo = ProcessedPhoto(id: UUID(), printFile: oldPrint,
+                                    displayFile: oldPrint, originals: [oldPrint])
+        let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
+        let result = try await service.applyFilter(.warm, to: photo, sessionDir: sessionDir)
+        XCTAssertEqual(result.id, photo.id, "无底图时应原样返回（不支持重打）")
+        XCTAssertEqual(result.printFile, photo.printFile)
+    }
+
+    /// 六档滤镜算子：全部不抛错、尺寸不变、.none 原图直返
+    func testAllStyleFiltersApply() throws {
+        let ctx = CIContext()
+        let source = try decodeJPEG(makeTestJPEG())
+        for f in PhotoFilter.allCases {
+            let out = try PipelineCore.applyStyleFilter(source, filter: f, ctx: ctx)
+            XCTAssertEqual(out.width, source.width, "\(f.rawValue) 不应改变尺寸")
+            XCTAssertEqual(out.height, source.height, "\(f.rawValue) 不应改变尺寸")
+        }
+        // .none 应逐像素一致（直返）
+        let none = try PipelineCore.applyStyleFilter(source, filter: .none, ctx: ctx)
+        XCTAssertEqual(none, source, "none 滤镜应原样返回")
+    }
+
+    // MARK: - QR 叠印
+
+    func testOverlayQRCode() throws {
+        let ctx = CIContext()
+        let base = try decodeJPEG(makeTestJPEG())
+        let out = try PipelineCore.overlayQRCode(on: base,
+                                                 content: "http://192.168.1.8:8080/photo/ABC-123", ctx: ctx)
+        XCTAssertEqual(out.width, base.width)
+        XCTAssertEqual(out.height, base.height)
+        // 右缘中部 QR 区域应被明显改写（白色垫底 + 黑色码点，与原图区域亮度差异显著）。
+        // 注：不用“更亮”断言——测试图右缘本就偏亮，QR 黑码点会拉低均值，方向不可预测。
+        let sampled = try averageLuminance(out, x: out.width - 120, y: out.height / 2 - 60,
+                                            w: 80, h: 80)
+        let original = try averageLuminance(base, x: base.width - 120, y: base.height / 2 - 60,
+                                             w: 80, h: 80)
+        XCTAssertGreaterThan(abs(sampled - original), 0.05,
+                             "QR 区域亮度应与原图差异显著（印上了东西），实际 out=\(sampled) base=\(original)")
+    }
+
+    // MARK: - 多拼版布局
+
+    /// 三种布局都产出 1200×1800，且 grid2x2/duo 与 strip 像素不同
+    func testCollageLayouts() throws {
+        let themeRoot = makeTempDir()
+        let photos = try (1...4).map { _ in try decodeJPEG(makeTestJPEG(seed: Int.random(in: 0...99))) }
+        let dateText = "2026-09-29"
+
+        var outputs: [CollageLayout: CGImage] = [:]
+        for layout in CollageLayout.allCases {
+            let img = try PipelineCore.composeCollage(photos: photos, layout: layout,
+                                                      themeDir: themeRoot, accent: nil, dateText: dateText)
+            XCTAssertEqual(img.width, 1200, "\(layout.rawValue) 输出宽应为 1200")
+            XCTAssertEqual(img.height, 1800, "\(layout.rawValue) 输出高应为 1800")
+            outputs[layout] = img
+        }
+        // 不同布局应产出不同像素（至少 strip vs grid2x2 vs duo 互不相同）
+        XCTAssertNotEqual(outputs[.strip], outputs[.grid2x2])
+        XCTAssertNotEqual(outputs[.strip], outputs[.duo])
+        XCTAssertNotEqual(outputs[.grid2x2], outputs[.duo])
+    }
+
+    /// 端到端：collage 带布局参数跑通 process（grid2x2 两张）
+    func testCollageDuoLayoutEndToEnd() async throws {
+        let sessionDir = makeTempDir()
+        let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
+        let result = try await service.process(originals: [makeCapture(1), makeCapture(2)],
+                                                mode: .collage(2, layout: .duo), sessionDir: sessionDir)
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(result.originals.count, 2)
+    }
+
+    // MARK: - 新工具
+
+    /// 解码 JPEG Data → CGImage
+    private func decodeJPEG(_ data: Data) throws -> CGImage {
+        let src = CGImageSourceCreateWithData(data as CFData, nil)!
+        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(src, 0, nil))
+    }
+
+    /// 采样区域平均亮度（0~1）：把 image 指定偏移区域画到 80×80 灰度上下文取均值
+    private func averageLuminance(_ image: CGImage, x: Int, y: Int, w: Int, h: Int) throws -> Double {
+        let gray = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        )!
+        gray.draw(image, in: CGRect(x: -x, y: -y, width: image.width, height: image.height))
+        guard let dataPtr = gray.data else { return 0 }
+        let buf = dataPtr.bindMemory(to: UInt8.self, capacity: w * h)
+        var total = 0.0
+        for i in 0..<(w * h) { total += Double(buf[i]) }
+        return total / Double(w * h) / 255.0
+    }
 }
