@@ -1,0 +1,1 @@
+  0x100042e94 in __ZN11lumixtether13DeviceAdapter33registerEventPtpipFoundDeviceProcEjPvS1_

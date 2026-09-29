@@ -42,6 +42,7 @@ final class MockCamera: CameraServicing, @unchecked Sendable {
     func disconnect() async {}
     func startLiveView() async throws { if let e = liveViewError { throw e } }
     func stopLiveView() async {}
+    func refreshStatus() async {}
 
     func capture() async throws -> CameraCapture {
         let (count, shouldFail): (Int, Bool) = lock.withLock {

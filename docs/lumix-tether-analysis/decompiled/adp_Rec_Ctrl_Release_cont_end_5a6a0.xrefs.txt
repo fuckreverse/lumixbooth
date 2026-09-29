@@ -1,0 +1,2 @@
+  0x10005a4e0 in __ZN11lumixtether13DeviceAdapter44adp_LMX_func_api_Rec_Ctrl_Release_cont_startEv
+  0x1000fffa8 in sub_1000F6768

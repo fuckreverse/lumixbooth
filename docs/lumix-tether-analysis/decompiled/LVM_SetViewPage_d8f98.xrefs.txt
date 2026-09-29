@@ -1,0 +1,1 @@
+  0x1000a296c in __ZN11lumixtether13DeviceAdapter24setLiveviewMultiViewPortEbii

@@ -1,0 +1,3 @@
+  0x1000d55b0 in __ZN15LiveViewManagerD2Ev
+  0x1000d57b8 in __ZN15LiveViewManager9ForceStopEv
+  0x1000d63bc in __ZN15LiveViewManager18CmdQueueThreadFuncEv

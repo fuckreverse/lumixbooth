@@ -1,0 +1,2 @@
+  0x10004e210 in __ZN11lumixtether13DeviceAdapter43adp_LMX_func_api_LiveView_Str_Set_Trans_ImgEb
+  0x10004e460 in __ZN11lumixtether13DeviceAdapter43adp_LMX_func_api_LiveView_Str_Set_Trans_ImgEb

@@ -1,0 +1,4 @@
+  0x100041830 in __ZN11lumixtether13DeviceAdapter26registerEventIdDeviceStrayEjj7QString
+  0x100045120 in __ZN11lumixtether13DeviceAdapter32registerEventPtpipDisconnectProcEjPvS1_
+  0x1000de138 in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv
+  0x100104c44 in sub_1000F6768

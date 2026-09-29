@@ -1,0 +1,2 @@
+  0x1000d69cc in __ZN15LiveViewManager9StartLiveEb
+  0x1000d748c in __ZN15LiveViewManager12UpdateCameraEv

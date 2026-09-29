@@ -1,0 +1,4 @@
+  0x100009e68 in __ZN11lumixtether12DeviceSearch16SearchThreadFuncEv
+  0x100030158 in __ZN11lumixtether13DeviceAdapter58adp_LMX_func_api_Search_and_Connect_DEVICE_TYPE_REMOTE_STDEb
+  0x1000fe2d8 in sub_1000F6768
+  0x1001075c8 in sub_1000F6768

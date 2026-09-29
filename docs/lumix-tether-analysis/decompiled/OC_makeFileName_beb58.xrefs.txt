@@ -1,0 +1,7 @@
+  0x1000be658 in __ZN9ObjectAdd9saveMovieEv
+  0x1000c1d24 in __ZN9ObjectAdd7saveRAWEj
+  0x1000c2468 in __ZN9ObjectAdd10saveObjectEj
+  0x1000c3370 in __ZN17ObjectReqTransfer10saveObjectEjjmj7QString
+  0x1000c3b88 in __ZN17ObjectReqTransfer7saveRAWEjjmj7QString
+  0x1000c456c in __ZN17ObjectReqTransfer7saveHLGEjjmj7QString
+  0x1000c4d98 in __ZN17ObjectReqTransfer8saveHEIFEjjmj7QString

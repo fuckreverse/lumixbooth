@@ -1,0 +1,2 @@
+  0x1000d58e8 in __ZN15LiveViewManager8StopLiveEv
+  0x1000d7558 in __ZN15LiveViewManager12UpdateCameraEv

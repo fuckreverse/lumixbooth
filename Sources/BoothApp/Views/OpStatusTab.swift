@@ -108,6 +108,7 @@ struct OpStatusTab: View {
                 Button(healthVM.refreshing ? "刷新中…" : "刷新") { healthVM.refresh() }
                     .buttonStyle(BoothBounceStyle())
                     .font(theme.bodyFont(15, weight: .bold))
+                    .foregroundStyle(theme.accentColor)
                     .disabled(healthVM.refreshing)
             }
             if let s = healthVM.status {
@@ -171,13 +172,8 @@ struct OpStatusTab: View {
             statusPill(job.status)
 
             if job.status == .failed {
-                Button("重试") { vm.retry(jobID: job.id) }
-                    .buttonStyle(BoothBounceStyle())
-                    .font(theme.bodyFont(15, weight: .bold))
-                Button("移除") { vm.remove(jobID: job.id) }
-                    .buttonStyle(BoothBounceStyle())
-                    .font(theme.bodyFont(15, weight: .bold))
-                    .foregroundStyle(theme.dangerColor)
+                BoothMiniButton("重试") { vm.retry(jobID: job.id) }
+                BoothMiniButton("移除", tint: theme.dangerColor) { vm.remove(jobID: job.id) }
             }
         }
         .padding(10)

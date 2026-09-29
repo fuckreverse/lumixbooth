@@ -1,0 +1,2 @@
+  0x1000db6c8 in __ZN11lumixtether21DeviceAdapterCallback22registerCallback_PtpIpEjPvS1_S1_
+  0x100102108 in sub_1000F6768

@@ -1,0 +1,3 @@
+  0x100052904 in __ZN11lumixtether13DeviceAdapter36ptpip_enhance_security_sent_passwordEv
+  0x1000a3930 in __ZN11lumixtether13DeviceAdapter19connectEnableDeviceEv
+  0x1000f09f8 in sub_1000F0848

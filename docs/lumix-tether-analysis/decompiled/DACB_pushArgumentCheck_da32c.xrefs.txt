@@ -1,0 +1,3 @@
+  0x10002f3d0 in __ZN11lumixtether13DeviceAdapter41adp_LMX_func_api_Search_Camera_List_startEv
+  0x1000343b4 in __ZN11lumixtether13DeviceAdapter40adp_LMX_func_api_Get_LiveView_data_StartEv
+  0x1000db158 in __ZN11lumixtether21DeviceAdapterCallback16registerCallbackEjjPc

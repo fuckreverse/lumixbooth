@@ -1,0 +1,3 @@
+  0x1000d6b6c in __ZN15LiveViewManager9StartLiveEb
+  0x1000d6ee4 in __ZN15LiveViewManager9StartLiveEb
+  0x1000d8434 in __ZN15LiveViewManager17LiveGetThreadFuncENSt3__16vectorI16_MULTIVIEW_PARAMNS0_9allocatorIS2_EEEE

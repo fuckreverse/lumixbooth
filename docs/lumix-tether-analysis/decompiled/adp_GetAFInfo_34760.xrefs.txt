@@ -1,0 +1,4 @@
+  0x10000ab34 in __ZN11lumixtether12DeviceSearch11GetSDKValueEv
+  0x100034758 in __ZN11lumixtether13DeviceAdapter21registerEventIdAfInfoEjj
+  0x1000de0b4 in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv
+  0x1000feba8 in sub_1000F6768

@@ -1,0 +1,4 @@
+  0x100009ac8 in __ZN11lumixtether12DeviceSearch10stopSearchEv
+  0x100009ca0 in __ZN11lumixtether12DeviceSearch16SearchThreadFuncEv
+  0x10000a034 in __ZN11lumixtether12DeviceSearch16SearchThreadFuncEv
+  0x1001005ec in sub_1000F6768

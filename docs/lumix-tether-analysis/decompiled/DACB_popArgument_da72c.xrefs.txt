@@ -1,0 +1,1 @@
+  0x1000dd178 in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv

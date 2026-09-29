@@ -1,0 +1,4 @@
+  0x1000d5bc4 in __ZN15LiveViewManager16UpdateCameraUUIDENSt3__16vectorI23_MULTIVIEW_DEVICE_PARAMNS0_9allocatorIS2_EEEE16_VIEW_SPLIT_MODE
+  0x1000d5c6c in __ZN15LiveViewManager14StartCmdThreadEv
+  0x1000d60c8 in __ZN15LiveViewManager14StartLiveAsyncEv
+  0x1000d62b0 in __ZN15LiveViewManager13StopLiveAsyncEv

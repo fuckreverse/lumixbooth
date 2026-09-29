@@ -1,0 +1,2 @@
+  0x100125d08 in sub_100125B08
+  0x1000d4b40 in __ZN12VideoAdapterC2EP7QObject

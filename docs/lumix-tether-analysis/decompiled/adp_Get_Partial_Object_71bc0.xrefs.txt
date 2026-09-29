@@ -1,0 +1,6 @@
+  0x1000c1ed0 in __ZN9ObjectAdd7saveRAWEj
+  0x1000c3cb0 in __ZN17ObjectReqTransfer7saveRAWEjjmj7QString
+  0x1000c4694 in __ZN17ObjectReqTransfer7saveHLGEjjmj7QString
+  0x1000c4ebc in __ZN17ObjectReqTransfer8saveHEIFEjjmj7QString
+  0x100103b20 in sub_1000F6768
+  0x100103db8 in sub_1000F6768

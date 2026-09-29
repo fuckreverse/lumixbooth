@@ -4,10 +4,15 @@ import BoothCore
 import BoothUI
 
 /// 设置页：全部读写 ConfigStore，改动即生效；含安全设置与危险区（防呆）
+/// 控件统一走 BoothUI 主题组件（BoothToggle/BoothStepper/BoothSegmented/
+/// BoothTextField/BoothSlider），控件宽度全页统一（segmented 280 / input 260）。
 struct OpSettingsTab: View {
     @Environment(\.boothTheme) private var theme
     @ObservedObject var vm: OpSettingsViewModel
     @ObservedObject var gate: OperatorGate
+
+    /// 统一控件宽度
+    private let controlWidth: CGFloat = 280
 
     @State private var themeName = ""
     @State private var portText = ""
@@ -80,75 +85,63 @@ struct OpSettingsTab: View {
 
                 HStack {
                     label("倒计时秒数")
-                    Picker("", selection: bind(\.capture.countdownSec)) {
-                        Text("3 秒").tag(3)
-                        Text("5 秒").tag(5)
-                        Text("10 秒").tag(10)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 260)
+                    BoothSegmented([
+                        .init(3, "3 秒"), .init(5, "5 秒"), .init(10, "10 秒")
+                    ], selection: bind(\.capture.countdownSec))
+                        .frame(width: controlWidth)
                 }
 
                 HStack {
                     label("默认模式")
                     // 整模式替换（单张 shots=1 / 拼版 shots=4），避免只改 kind 留下不一致
-                    Picker("", selection: Binding<ShootKind>(
+                    BoothSegmented([
+                        .init(ShootKind.single, "单张美照"), .init(ShootKind.collage, "四连拍拼版")
+                    ], selection: Binding<ShootKind>(
                         get: { vm.config.capture.defaultMode.kind },
                         set: { kind in vm.update {
                             $0.capture.defaultMode = kind == .single ? .single : .collage(4)
-                        } }
-                    )) {
-                        Text("单张美照").tag(ShootKind.single)
-                        Text("四连拍拼版").tag(ShootKind.collage)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 260)
+                        } }))
+                        .frame(width: controlWidth)
                 }
 
                 HStack {
                     label("拼版布局")
                     // 拼版默认布局（经典拼条 / 四宫格 / 双格大图）
-                    Picker("", selection: Binding<CollageLayout>(
-                        get: { vm.config.capture.defaultMode.layout },
-                        set: { layout in vm.update {
-                            if $0.capture.defaultMode.kind == .collage {
-                                $0.capture.defaultMode = .collage($0.capture.defaultMode.shots, layout: layout)
-                            }
-                        } }
-                    )) {
-                        ForEach(CollageLayout.allCases, id: \.rawValue) { l in
-                            Text(l.displayName).tag(l)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 260)
+                    BoothSegmented(
+                        CollageLayout.allCases.map { .init($0, $0.displayName) },
+                        selection: Binding<CollageLayout>(
+                            get: { vm.config.capture.defaultMode.layout },
+                            set: { layout in vm.update {
+                                if $0.capture.defaultMode.kind == .collage {
+                                    $0.capture.defaultMode = .collage($0.capture.defaultMode.shots, layout: layout)
+                                }
+                            } }))
+                        .frame(width: controlWidth)
                 }
 
-                Toggle("连拍不中断（拼版仅首张倒计时）",
-                       isOn: bind(\.capture.continuousCollage))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
+                BoothToggle("连拍不中断（拼版仅首张倒计时）",
+                            isOn: bind(\.capture.continuousCollage))
 
                 HStack {
                     label("REVIEW 超时")
-                    Stepper("\(vm.config.capture.reviewTimeoutSec) 秒",
-                            value: bind(\.capture.reviewTimeoutSec), in: 10...300, step: 10)
+                    BoothStepper(value: bind(\.capture.reviewTimeoutSec), in: 10...300, step: 10) {
+                        "\($0) 秒"
+                    }
+                    .frame(width: controlWidth)
                 }
 
-                Toggle("超时自动打印（关闭则只回待机）",
-                       isOn: bind(\.capture.autoPrintOnTimeout))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
+                BoothToggle("超时自动打印（关闭则只回待机）",
+                            isOn: bind(\.capture.autoPrintOnTimeout))
 
-                Toggle("待机屏历史成片轮播",
-                       isOn: bind(\.capture.idleSlideshow))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
+                BoothToggle("待机屏历史成片轮播",
+                            isOn: bind(\.capture.idleSlideshow))
 
                 HStack {
                     label("轮播间隔")
-                    Stepper("\(vm.config.capture.idleSlideshowSec) 秒",
-                            value: bind(\.capture.idleSlideshowSec), in: 2...30)
+                    BoothStepper(value: bind(\.capture.idleSlideshowSec), in: 2...30) {
+                        "\($0) 秒"
+                    }
+                    .frame(width: controlWidth)
                 }
             }
         }
@@ -162,65 +155,60 @@ struct OpSettingsTab: View {
                 cardTitle("打印设置", emoji: "🖨️")
                 HStack {
                     label("默认打印份数")
-                    Stepper("\(vm.config.printing.defaultCopies) 份",
-                            value: bind(\.printing.defaultCopies), in: 1...4)
+                    BoothStepper(value: bind(\.printing.defaultCopies), in: 1...4) {
+                        "\($0) 份"
+                    }
+                    .frame(width: controlWidth)
                 }
                 HStack {
                     label("每小时打印上限")
-                    Stepper(vm.config.printing.printQuotaPerHour == 0
-                            ? "不限制"
-                            : "\(vm.config.printing.printQuotaPerHour) 张/时",
-                            value: Binding(
-                                get: { max(vm.config.printing.printQuotaPerHour, 1) },
-                                set: { value in vm.update { $0.printing.printQuotaPerHour = value } }),
-                            in: 1...500, step: 10)
-                    Toggle("启用", isOn: Binding(
-                        get: { vm.config.printing.printQuotaPerHour > 0 },
-                        set: { on in vm.update { $0.printing.printQuotaPerHour = on ? 60 : 0 } }))
-                    .frame(width: 80)
-                    Text("防脚本刷打印；超限任务标记失败")
-                        .font(theme.bodyFont(13))
-                        .foregroundStyle(theme.textSecondaryColor)
+                    BoothStepper(value: Binding(
+                        get: { max(vm.config.printing.printQuotaPerHour, 1) },
+                        set: { value in vm.update { $0.printing.printQuotaPerHour = value } }),
+                        in: 1...500, step: 10) {
+                        vm.config.printing.printQuotaPerHour == 0 ? "不限制" : "\($0) 张/时"
+                    }
+                    .frame(width: controlWidth)
+                    BoothMiniButton(vm.config.printing.printQuotaPerHour > 0 ? "已启用" : "启用",
+                                    tint: vm.config.printing.printQuotaPerHour > 0 ? theme.successColor : theme.textSecondaryColor) {
+                        vm.update { $0.printing.printQuotaPerHour = $0.printing.printQuotaPerHour > 0 ? 0 : 60 }
+                    }
                 }
-                Toggle("成片边缘印二维码（扫码存电子版）",
-                       isOn: bind(\.printing.printQRCode))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
-                Toggle("大屏显示打印按钮（关则仅 iPad / P 键可打印）",
-                       isOn: bind(\.printing.showPrintButton))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
-                Toggle("P 键触发打印（操作员兜底通道）",
-                       isOn: bind(\.printing.printKeyEnabled))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
+                Text("防脚本刷打印；超限任务标记失败")
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
+                BoothToggle("成片边缘印二维码（扫码存电子版）",
+                            isOn: bind(\.printing.printQRCode))
+                BoothToggle("大屏显示打印按钮（关则仅 iPad / P 键可打印）",
+                            isOn: bind(\.printing.showPrintButton))
+                BoothToggle("P 键触发打印（操作员兜底通道）",
+                            isOn: bind(\.printing.printKeyEnabled))
                 HStack {
                     label("超时自动打印延迟")
-                    Stepper("\(vm.config.printing.autoPrintDelaySec) 秒",
-                            value: bind(\.printing.autoPrintDelaySec), in: 0...30)
+                    BoothStepper(value: bind(\.printing.autoPrintDelaySec), in: 0...30) {
+                        "\($0) 秒"
+                    }
+                    .frame(width: controlWidth)
                 }
                 HStack {
                     label("“打印中”停留时长")
-                    Stepper("\(vm.config.printing.printingDwellSec) 秒",
-                            value: bind(\.printing.printingDwellSec), in: 0...15)
+                    BoothStepper(value: bind(\.printing.printingDwellSec), in: 0...15) {
+                        "\($0) 秒"
+                    }
+                    .frame(width: controlWidth)
                 }
-                Toggle("演示模式（不送打印机，输出 PDF 到预览目录）",
-                       isOn: bind(\.printing.dryRun))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
+                BoothToggle("演示模式（不送打印机，输出 PDF 到预览目录）",
+                            isOn: bind(\.printing.dryRun))
                 HStack {
                     label("预览目录")
-                    Button("打开 print-preview 目录") {
+                    BoothMiniButton("打开 print-preview 目录") {
                         NSWorkspace.shared.open(BoothPaths.printPreviewDir)
                     }
-                    .font(theme.bodyFont(15))
                     Text("dry-run 打印的 PDF 落在这里")
                         .font(theme.bodyFont(14))
                         .foregroundStyle(theme.textSecondaryColor)
                 }
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
     }
 
@@ -255,26 +243,26 @@ struct OpSettingsTab: View {
                 }
 
                 // 退出保护
-                Toggle("退出保护（Cmd+Q / 关窗需验证 PIN）", isOn: bind(\.security.quitProtection))
-                    .disabled(!gate.hasPIN || gate.protectionOptOut)
+                BoothToggle("退出保护（Cmd+Q / 关窗需验证 PIN）",
+                            isOn: bind(\.security.quitProtection))
+                    .opacity(gate.hasPIN && !gate.protectionOptOut ? 1 : 0.4)
+                    .allowsHitTesting(gate.hasPIN && !gate.protectionOptOut)
                 Text("未设置 PIN 时无法验证，退出保护不生效；仅影响本 App，不影响其他应用。")
                     .font(theme.bodyFont(13))
                     .foregroundStyle(theme.textSecondaryColor)
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
     }
 
     private var pinChangeRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                SecureField("旧 PIN", text: $oldPINField)
-                    .textFieldStyle(.roundedBorder).frame(width: 100)
-                SecureField("新 PIN（4-6 位）", text: $newPINField1)
-                    .textFieldStyle(.roundedBorder).frame(width: 150)
-                SecureField("确认新 PIN", text: $newPINField2)
-                    .textFieldStyle(.roundedBorder).frame(width: 150)
+                BoothTextField("旧 PIN", text: $oldPINField, secure: true)
+                    .frame(width: 120)
+                BoothTextField("新 PIN（4-6 位）", text: $newPINField1, secure: true)
+                    .frame(width: 160)
+                BoothTextField("确认新 PIN", text: $newPINField2, secure: true)
+                    .frame(width: 160)
                 BoothSecondaryButton("修改", emoji: "✏️") { submitChangePIN() }
                     .disabled(!isValidPINFormat(newPINField1) || newPINField1 != newPINField2 || oldPINField.isEmpty)
                 BoothSecondaryButton("放弃保护", emoji: "🙈") { submitDisablePIN() }
@@ -322,44 +310,39 @@ struct OpSettingsTab: View {
         BoothCard {
             VStack(alignment: .leading, spacing: 14) {
                 cardTitle("修图开关", emoji: "✨")
-                Toggle("自动调色", isOn: bind(\.imaging.autoColor))
-                Toggle("美肤磨皮", isOn: bind(\.imaging.skinSmoothing))
-                Toggle("人像换背景（需主题带 background.png）", isOn: bind(\.imaging.replaceBackground))
-                Toggle("边框 / 相框", isOn: bind(\.imaging.frame))
-                Toggle("日期水印", isOn: bind(\.imaging.dateWatermark))
-                Toggle("拍后自选滤镜（REVIEW 选择条）", isOn: bind(\.imaging.filterSelection))
-                Toggle("拼版生成 Boomerang GIF（扫码看动态图）", isOn: bind(\.imaging.generateGIF))
+                BoothToggle("自动调色", isOn: bind(\.imaging.autoColor))
+                BoothToggle("美肤磨皮", isOn: bind(\.imaging.skinSmoothing))
+                BoothToggle("人像换背景（需主题带 background.png）", isOn: bind(\.imaging.replaceBackground))
+                BoothToggle("边框 / 相框", isOn: bind(\.imaging.frame))
+                BoothToggle("日期水印", isOn: bind(\.imaging.dateWatermark))
+                BoothToggle("拍后自选滤镜（REVIEW 选择条）", isOn: bind(\.imaging.filterSelection))
+                BoothToggle("拼版生成 Boomerang GIF（扫码看动态图）", isOn: bind(\.imaging.generateGIF))
 
                 HStack {
                     label("默认滤镜")
-                    Picker("", selection: bind(\.imaging.defaultFilter)) {
-                        ForEach(PhotoFilter.allCases, id: \.rawValue) { f in
-                            Text("\(f.emoji) \(f.displayName)").tag(f)
-                        }
-                    }
-                    .frame(width: 260)
+                    // 主题化分段（原生 Menu 样式与全页不符；7 段短文案放得下）
+                    BoothSegmented(
+                        PhotoFilter.allCases.map { .init($0, "\($0.displayName)") },
+                        selection: bind(\.imaging.defaultFilter))
+                        .frame(width: 430)
                 }
 
                 HStack {
                     label("主题名")
-                    TextField("default", text: $themeName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
-                        .onSubmit {
-                            // onSubmit 闭包是 Sendable 非隔离的，视图状态实际跑在主线程
-                            MainActor.assumeIsolated {
-                                let name = themeName
-                                vm.update { $0.imaging.themeName = name }
-                                Log.ui.info("主题名已修改：\(name)")
-                            }
+                    BoothTextField("default", text: $themeName) {
+                        // onSubmit 闭包是 Sendable 非隔离的，视图状态实际跑在主线程
+                        MainActor.assumeIsolated {
+                            let name = themeName
+                            vm.update { $0.imaging.themeName = name }
+                            Log.ui.info("主题名已修改：\(name)")
                         }
+                    }
+                    .frame(width: 220)
                     Text("修改后回车生效")
                         .font(theme.bodyFont(14))
                         .foregroundStyle(theme.textSecondaryColor)
                 }
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
     }
 
@@ -371,13 +354,13 @@ struct OpSettingsTab: View {
         BoothCard {
             VStack(alignment: .leading, spacing: 14) {
                 cardTitle("提示音", emoji: "🔊")
-                Toggle("启用提示音（活动现场总开关）", isOn: bind(\.sounds.enabled))
-                Toggle("倒计时哔声", isOn: bind(\.sounds.countdownBeep))
-                Toggle("快门音", isOn: bind(\.sounds.shutterSound))
-                Toggle("打印完成叮声", isOn: bind(\.sounds.printDoneSound))
+                BoothToggle("启用提示音（活动现场总开关）", isOn: bind(\.sounds.enabled))
+                BoothToggle("倒计时哔声", isOn: bind(\.sounds.countdownBeep))
+                BoothToggle("快门音", isOn: bind(\.sounds.shutterSound))
+                BoothToggle("打印完成叮声", isOn: bind(\.sounds.printDoneSound))
                 HStack {
                     label("音量")
-                    Slider(value: bind(\.sounds.volume), in: 0...1, step: 0.1)
+                    BoothSlider(value: bind(\.sounds.volume), in: 0...1)
                         .frame(width: 220)
                     Text("\(Int(vm.config.sounds.volume * 100))%")
                         .font(theme.bodyFont(15))
@@ -385,8 +368,6 @@ struct OpSettingsTab: View {
                         .frame(width: 44, alignment: .trailing)
                 }
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
     }
 
@@ -394,29 +375,25 @@ struct OpSettingsTab: View {
         BoothCard {
             VStack(alignment: .leading, spacing: 14) {
                 cardTitle("邮箱采集与重打", emoji: "✉️")
-                Toggle("REVIEW 页邮箱采集（宾客输邮箱领电子版）", isOn: bind(\.share.emailCapture))
+                BoothToggle("REVIEW 页邮箱采集（宾客输邮箱领电子版）", isOn: bind(\.share.emailCapture))
                 Text("邮箱仅落盘 emails.json，不发送；操作员页可导出 CSV。")
                     .font(theme.bodyFont(13))
                     .foregroundStyle(theme.textSecondaryColor)
                 HStack {
                     label("/gallery 重打口令")
-                    SecureField("1234", text: $reprintCodeField)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
-                        .onSubmit {
-                            MainActor.assumeIsolated {
-                                let code = reprintCodeField.trimmingCharacters(in: .whitespaces)
-                                vm.update { $0.security.reprintCode = code }
-                                Log.ui.info("重打口令已修改")
-                            }
+                    BoothTextField("1234", text: $reprintCodeField, secure: true) {
+                        MainActor.assumeIsolated {
+                            let code = reprintCodeField.trimmingCharacters(in: .whitespaces)
+                            vm.update { $0.security.reprintCode = code }
+                            Log.ui.info("重打口令已修改")
                         }
+                    }
+                    .frame(width: 160)
                     Text("长按相册成片输口令补打；回车生效")
                         .font(theme.bodyFont(13))
                         .foregroundStyle(theme.textSecondaryColor)
                 }
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
         .onAppear { if reprintCodeField.isEmpty { reprintCodeField = vm.config.security.reprintCode } }
     }
@@ -427,24 +404,18 @@ struct OpSettingsTab: View {
                 cardTitle("省电模式", emoji: "🌙")
                 HStack {
                     label("待机调暗")
-                    Picker("", selection: Binding<Int>(
+                    BoothSegmented([
+                        .init(0, "关闭"), .init(5, "5 分钟"), .init(10, "10 分钟"),
+                        .init(20, "20 分钟"), .init(30, "30 分钟")
+                    ], selection: Binding<Int>(
                         get: { vm.config.capture.idleDimAfterMin },
-                        set: { v in vm.update { $0.capture.idleDimAfterMin = v } })) {
-                        Text("关闭").tag(0)
-                        Text("5 分钟").tag(5)
-                        Text("10 分钟").tag(10)
-                        Text("20 分钟").tag(20)
-                        Text("30 分钟").tag(30)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 380)
+                        set: { v in vm.update { $0.capture.idleDimAfterMin = v } }))
+                        .frame(width: 380)
                 }
                 Text("待机超过 N 分钟：大屏盖罩调暗、暂停背景轮播；任何操作自动回亮。")
                     .font(theme.bodyFont(13))
                     .foregroundStyle(theme.textSecondaryColor)
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
     }
 
@@ -452,26 +423,25 @@ struct OpSettingsTab: View {
         BoothCard {
             VStack(alignment: .leading, spacing: 14) {
                 cardTitle("视频留言簿（婚礼）", emoji: "💌")
-                Toggle("启用留言簿", isOn: bind(\.guestbook.enabled))
+                BoothToggle("启用留言簿", isOn: bind(\.guestbook.enabled))
                 HStack {
                     label("单条最长")
-                    Stepper("\(vm.config.guestbook.maxDurationSec) 秒",
-                            value: bind(\.guestbook.maxDurationSec), in: 5...120, step: 5)
+                    BoothStepper(value: bind(\.guestbook.maxDurationSec), in: 5...120, step: 5) {
+                        "\($0) 秒"
+                    }
+                    .frame(width: controlWidth)
                 }
                 HStack {
                     label("祝福语叠印")
-                    TextField("新婚快乐", text: Binding(
+                    BoothTextField("新婚快乐", text: Binding(
                         get: { vm.config.guestbook.overlayText },
                         set: { v in vm.update { $0.guestbook.overlayText = String(v.prefix(20)) } }))
-                        .textFieldStyle(.roundedBorder)
                         .frame(width: 220)
                     Text("录制画面右上角叠印，限 20 字")
                         .font(theme.bodyFont(13))
                         .foregroundStyle(theme.textSecondaryColor)
                 }
             }
-            .font(theme.bodyFont(17))
-            .foregroundStyle(theme.textColor)
         }
     }
 
@@ -481,24 +451,20 @@ struct OpSettingsTab: View {
         BoothCard {
             VStack(alignment: .leading, spacing: 16) {
                 cardTitle("iPad 服务", emoji: "📱")
-                Toggle("启用内嵌 Web 服务", isOn: bind(\.server.enabled))
-                    .font(theme.bodyFont(17))
-                    .foregroundStyle(theme.textColor)
+                BoothToggle("启用内嵌 Web 服务", isOn: bind(\.server.enabled))
                 HStack {
                     label("端口")
-                    TextField("8080", text: $portText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
-                        .onSubmit {
-                            MainActor.assumeIsolated {
-                                if let port = UInt16(portText) {
-                                    vm.update { $0.server.port = port }
-                                    Log.ui.info("服务端口已修改：\(port)（重启 App 后生效）")
-                                } else {
-                                    portText = String(vm.config.server.port)
-                                }
+                    BoothTextField("8080", text: $portText) {
+                        MainActor.assumeIsolated {
+                            if let port = UInt16(portText) {
+                                vm.update { $0.server.port = port }
+                                Log.ui.info("服务端口已修改：\(port)（重启 App 后生效）")
+                            } else {
+                                portText = String(vm.config.server.port)
                             }
                         }
+                    }
+                    .frame(width: 160)
                     Text("端口修改需重启 App 生效")
                         .font(theme.bodyFont(14))
                         .foregroundStyle(theme.warningColor)
@@ -600,7 +566,7 @@ struct OpSettingsTab: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(vm.backups) { backup in
-                            BoothSecondaryButton("恢复", emoji: "⏮️") {
+                            BoothMiniButton("恢复") {
                                 vm.restoreBackup(backup.name)
                             }
                             Text(backup.timeText)

@@ -56,6 +56,7 @@ public actor LumixCameraService: CameraServicing {
 
     private var liveViewTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    private var statusTask: Task<Void, Never>?      // 电量/存储轮询
     private var liveViewBuffer: UnsafeMutablePointer<UInt8>?
     private var liveViewBufferSize = 0
     /// 断线前是否开着 LiveView（重连成功后据此恢复）
@@ -64,6 +65,11 @@ public actor LumixCameraService: CameraServicing {
     private var manuallyDisconnected = false
     /// LiveView 连续非忙错误计数（判定失联的启发式）
     private var consecutiveLiveErrors = 0
+    private var consecutiveStatusErrors = 0
+    /// 拍照/下载期间置位：暂停 LiveView 取帧与状态轮询的库调用。
+    /// 库内 ICCameraDevice 不支持并发命令——拍照数据流期间并发取帧/查状态
+    /// 会在库内写坏内存（2026-09-29 两次拍照即崩的根因）。
+    private var libraryBusy = false
     private static let liveErrorThreshold = 5
 
     // MARK: - 事件 / 帧广播（多订阅者各自独立）
@@ -78,6 +84,9 @@ public actor LumixCameraService: CameraServicing {
         let timeoutTask: Task<Void, Never>
     }
     private var objectWaiters: [UUID: ObjectWaiter] = [:]
+
+/// 无等待者期间到达的 ObjectAdded handle（跳过 RAW 重等 JPEG 时不丢事件）
+private var pendingObjectHandles: [UInt32] = []
 
     // MARK: - 协议属性
 
@@ -174,23 +183,44 @@ public actor LumixCameraService: CameraServicing {
         // 2) Init + 注册事件回调（全进程一次）
         if !callbacksRegistered {
             Log.camera.debug("LMX_func_api_Init + 注册事件回调")
-            lib.Init()
+            LmxDriver.shared.sync { lib.Init() }
             LmxEventRouter.shared.setHandler { [weak self] cbid, param, uuid in
                 Task { await self?.handleNotify(cbid: cbid, param: param, uuid: uuid) }
             }
             var ok = true
-            for ev in [LmxEvent.objectAdded, LmxEvent.deviceStray, LmxEvent.reqObjTransfer,
-                       LmxEvent.dataTransferProg, LmxEvent.storeAdded, LmxEvent.storeRemoved] {
-                let r = lib.RegNotifyCallback(ev, lmxNotifyTrampoline)
-                if r == 0 {
-                    Log.camera.warn("Reg_NotifyCallback 失败 event=\(lmxErrHex(ev))")
+            for ev in [LmxEvent.objectAdded, LmxEvent.deviceStray, LmxEvent.deviceStrayAlt,
+                       LmxEvent.reqObjTransfer,
+                       LmxEvent.dataTransferProg, LmxEvent.dataTransferProgLegacy,
+                       LmxEvent.storeAdded, LmxEvent.storeRemoved,
+                       LmxEvent.storageInfoChanged] {
+                let r = LmxDriver.shared.sync { lib.RegNotifyCallback(ev, lmxNotifyTrampoline) }
+                // 逆向前确认：返回值 0 = 注册成功；0x20003(131075) = 事件已在表中；
+                // 0x20004(131076) = 表满（>255）。只有后者才是真失败。
+                if r != 0 && r != 131075 {
+                    Log.camera.warn("Reg_NotifyCallback 失败 event=\(lmxErrHex(ev)) ret=\(r)")
                     ok = false
                 }
             }
             callbacksRegistered = ok
         }
 
-        try openSessionFlow(lib: lib)
+        // 3) Search → Select → OpenSession；首连失败进入指数退避重连循环
+        //（BoothApp 启动时"相机连接交给 CameraKit 自重连"，SessionCoordinator
+        //  只等事件，不负责重试）
+        do {
+            try openSessionFlow(lib: lib)
+        } catch {
+            if !manuallyDisconnected {
+                Log.camera.warn("首连失败，进入自动重连循环")
+                setState(.reconnecting, reason: "首连失败")
+                startReconnectLoop()
+            }
+            throw error
+        }
+
+        // 连接成功即拉首份状态报告 + 启动轮询
+        startStatusLoop()
+        await refreshStatus()
     }
 
     /// Search → Select → OpenSession 主流程（connect 与重连共用）
@@ -211,20 +241,31 @@ public actor LumixCameraService: CameraServicing {
         var err: UInt32 = 0
         let info = UnsafeMutableRawPointer.allocate(byteCount: LmxDeviceInfoParser.bufferSize, alignment: 8)
         defer { info.deallocate() }
-        _ = lib.SearchDevice(info, &err)
+        _ = LmxDriver.shared.sync { lib.SearchDevice(info, &err) }
         let name = UnsafeMutablePointer<CChar>.allocate(capacity: 512)
         defer { name.deallocate() }
-        guard lib.SelectPnPDevice(dev.devId, info, name, nil, nil, 0, &err) != 0 else {
+        guard LmxDriver.shared.sync({ lib.SelectPnPDevice(dev.devId, info, name, nil, nil, 0, &err) }) != 0 else {
             setState(.disconnected, reason: "SelectPnPDevice 失败")
             Log.camera.error("SelectPnPDevice 失败 err=\(lmxErrHex(err))")
             throw BoothError.cameraConnectFailed("SelectPnPDevice err=\(lmxErrHex(err))")
         }
+        // SelectPnPDevice 成功后，name 输出参数里是库内部生成的【会话 UUID】
+        // （uuid_generate_random，存于句柄 handle+260）。后续所有 API 的 uuid
+        // 参数必须传这个会话 UUID，而不是 Search 返回的序列号——
+        // Controller send: 按 strcmp(handle+260, uuid) 查句柄，传序列号必然失败。
+        let nameLen = strlen(name)
+        guard nameLen > 0 else {
+            setState(.disconnected, reason: "SelectPnPDevice 未返回会话 UUID")
+            Log.camera.error("SelectPnPDevice 成功但 name 为空（无会话 UUID）")
+            throw BoothError.cameraConnectFailed("SelectPnPDevice 未返回会话 UUID")
+        }
+        Log.camera.info("SelectPnPDevice 会话 UUID: \(String(cString: name))")
 
-        // 5) OpenSession(0)
-        let uuidBuf = strdup(dev.uuid)
+        // 5) OpenSession(0) —— 传会话 UUID（name），不是序列号
+        let uuidBuf = strdup(name)
         var sess: UInt32 = 0
         err = 0
-        guard lib.OpenSession(0, &sess, uuidBuf!, &err) != 0 else {
+        guard let uuidBuf, LmxDriver.shared.sync({ lib.OpenSession(0, &sess, uuidBuf, &err) }) != 0 else {
             free(uuidBuf)
             setState(.disconnected, reason: "OpenSession 失败")
             Log.camera.error("OpenSession 失败 err=\(lmxErrHex(err))")
@@ -237,6 +278,7 @@ public actor LumixCameraService: CameraServicing {
         device = dev
         session = sess
         consecutiveLiveErrors = 0
+        consecutiveStatusErrors = 0
         setState(.connected, reason: "session=0x\(String(sess, radix: 16))")
         emit(.connected(dev))
     }
@@ -247,7 +289,7 @@ public actor LumixCameraService: CameraServicing {
         defer { buf.deallocate() }
         buf.initializeMemory(as: UInt8.self, repeating: 0, count: LmxDeviceInfoParser.bufferSize)
         var err: UInt32 = 0
-        guard lib.SearchDevice(buf, &err) != 0 else {
+        guard LmxDriver.shared.sync({ lib.SearchDevice(buf, &err) }) != 0 else {
             Log.camera.warn("Search_Device 失败 err=\(lmxErrHex(err))")
             return []
         }
@@ -258,11 +300,12 @@ public actor LumixCameraService: CameraServicing {
         Log.camera.info("disconnect() 主动断开")
         manuallyDisconnected = true
         reconnectTask?.cancel(); reconnectTask = nil
+        statusTask?.cancel(); statusTask = nil
         await stopLiveViewInternal(callLibrary: state == .liveView)
         failAllObjectWaiters(BoothError.captureFailed("相机已断开"))
         if let lib, let uuid = uuidCString {
             var err: UInt32 = 0
-            _ = lib.CloseDevice(uuid, &err)
+            _ = LmxDriver.shared.sync { lib.CloseDevice(uuid, &err) }
             Log.camera.debug("CloseDevice err=\(lmxErrHex(err))")
         }
         if let uuid = uuidCString { free(uuid) }
@@ -286,7 +329,7 @@ public actor LumixCameraService: CameraServicing {
             throw BoothError.liveViewFailed("当前状态 \(state.rawValue) 不能开 LiveView")
         }
         var err: UInt32 = 0
-        guard lib.LiveViewStart(uuid, &err) != 0 else {
+        guard LmxDriver.shared.sync({ lib.LiveViewStart(uuid, &err) }) != 0 else {
             Log.camera.error("LiveView Start 失败 err=\(lmxErrHex(err))")
             throw BoothError.liveViewFailed("LiveView Start err=\(lmxErrHex(err))")
         }
@@ -306,7 +349,7 @@ public actor LumixCameraService: CameraServicing {
         freeLiveViewBuffer()
         if callLibrary, let lib, let uuid = uuidCString {
             var err: UInt32 = 0
-            _ = lib.LiveViewStop(uuid, &err)
+            _ = LmxDriver.shared.sync { lib.LiveViewStop(uuid, &err) }
             Log.camera.debug("LiveView Stop err=\(lmxErrHex(err))")
         }
         if state == .liveView { setState(.connected, reason: "LiveView 停止") }
@@ -328,7 +371,7 @@ public actor LumixCameraService: CameraServicing {
 
     private func allocateLiveViewBuffer() {
         freeLiveViewBuffer()
-        liveViewBufferSize = max(config.liveViewBufferSize, 1 << 16)
+        liveViewBufferSize = max(config.liveViewBufferSize, 1 << 20)  // E3：官方 1MB，防 JPEG 帧截断
         liveViewBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: liveViewBufferSize)
     }
 
@@ -341,13 +384,21 @@ public actor LumixCameraService: CameraServicing {
     /// 轮询一帧 LiveView。返回值：是否继续轮询（false = 失联转重连）
     private func pollLiveViewFrame() -> Bool {
         guard state == .liveView, let lib, let uuid = uuidCString, let buf = liveViewBuffer else { return false }
+        if libraryBusy { return true }   // 拍照/下载中：跳过本帧，不碰库
         var size: UInt32 = 0
         var err: UInt32 = 0
-        let r = lib.GetLiveViewData(buf, &size, uuid, &err)
+        let r = LmxDriver.shared.sync { lib.GetLiveViewData(buf, &size, uuid, &err) }
         if r != 0 && size > 0 {
-            let frame = Data(bytes: buf, count: Int(size))
-            pushFrame(frame)
-            consecutiveLiveErrors = 0
+            let raw = Data(bytes: buf, count: Int(size))
+            // Mnt_Get_LiveView_data 返回的不是裸 JPEG：前面是 PTP TLV 段
+            //（{u32 tag(0x17xxxxxx); u32 size; payload} 列表，实测 JPEG 负载
+            // 从 SOI 标记 FF D8 FF 起，头长约 0xB4 字节）。定位 SOI 后截取。
+            if let soi = raw.firstRange(of: Data([0xFF, 0xD8, 0xFF])) {
+                pushFrame(raw.subdata(in: soi.lowerBound..<raw.endIndex))
+                consecutiveLiveErrors = 0
+                return true
+            }
+            // 无 SOI：当作无新帧，不计数（避免误判失联）
             return true
         }
         if err == LmxError.lvBusy { return true }   // 忙：正常，跳过等下一帧
@@ -362,6 +413,68 @@ public actor LumixCameraService: CameraServicing {
         return true
     }
 
+    // MARK: - 电量 / 存储状态轮询
+
+    /// 立即查一次电量/存储并广播 statusReport（协议要求；也供事件触发刷新）
+    public func refreshStatus() async {
+        guard let lib, let uuid = uuidCString,
+              state == .connected || state == .liveView else { return }
+        if libraryBusy { return }   // 拍照/下载中：跳过本轮状态轮询，不碰库
+
+        // 电量：GetBatteryInfo 写 16B 结构体
+        var batteryFields: [UInt16] = []
+        var bat = LmxBatteryInfo()
+        var err: UInt32 = 0
+        var failCount = 0
+        if LmxDriver.shared.sync({ lib.GetBatteryInfo(&bat, uuid, &err) }) != 0 {
+            batteryFields = bat.fieldArray
+        } else {
+            failCount += 1
+            Log.camera.debug("GetBatteryInfo 失败 err=\(lmxErrHex(err))")
+        }
+
+        // 存储：GetFreeSpaceInSec 可录秒数
+        var freeSec: UInt32 = 0
+        err = 0
+        var freeSeconds: UInt32?
+        if LmxDriver.shared.sync({ lib.GetFreeSpaceInSec(&freeSec, uuid, &err) }) != 0 {
+            freeSeconds = freeSec
+        } else {
+            failCount += 1
+            Log.camera.debug("GetFreeSpaceInSec 失败 err=\(lmxErrHex(err))")
+        }
+
+        // 失联检测：两项都返回 0（err=0）说明句柄/会话已静默失效
+        //（如 ptpcamerad 抢走设备后 XPC 代理失效）。连续两轮全失败则转重连。
+        if failCount >= 2 {
+            consecutiveStatusErrors += 1
+            if consecutiveStatusErrors >= 2 {
+                handleConnectionLost("状态轮询连续失败（会话静默失效）")
+                return
+            }
+        } else {
+            consecutiveStatusErrors = 0
+        }
+
+        let report = CameraStatusReport(batteryFields: batteryFields, freeRecordSeconds: freeSeconds)
+        Log.camera.debug("状态报告: battery=\(batteryFields) freeSec=\(freeSec)")
+        emit(.statusReport(report))
+    }
+
+    /// 连接成功后启动轮询（间隔 config.statusPollIntervalSec，0 = 不启动）
+    private func startStatusLoop() {
+        statusTask?.cancel()
+        let interval = max(config.statusPollIntervalSec, 1)
+        guard config.statusPollIntervalSec > 0 else { return }
+        statusTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await self?.refreshStatus()
+            }
+        }
+    }
+
     // MARK: - 断线重连
 
     /// 进入重连：状态 reconnecting，指数退避 Search/Select/OpenSession，
@@ -374,6 +487,7 @@ public actor LumixCameraService: CameraServicing {
 
         // 断开现场清理（不调库——设备已失联）
         liveViewTask?.cancel(); liveViewTask = nil
+        statusTask?.cancel(); statusTask = nil
         freeLiveViewBuffer()
         if let uuid = uuidCString { free(uuid) }
         uuidCString = nil
@@ -403,7 +517,7 @@ public actor LumixCameraService: CameraServicing {
     }
 
     /// 单次重连尝试。成功返回 true。
-    private func attemptReconnect(attempt: Int) -> Bool {
+    private func attemptReconnect(attempt: Int) async -> Bool {
         guard let lib else { return false }
         Log.camera.info("重连尝试 #\(attempt)…")
         do {
@@ -425,6 +539,9 @@ public actor LumixCameraService: CameraServicing {
         } else {
             Log.camera.info("重连成功（第 \(attempt) 次尝试）")
         }
+        // 恢复状态轮询 + 立即出一份报告
+        startStatusLoop()
+        await refreshStatus()
         return true
     }
 
@@ -439,14 +556,20 @@ public actor LumixCameraService: CameraServicing {
         case LmxEvent.reqObjTransfer:
             Log.camera.info("事件 ReqObjTransfer handle=\(param)")
             fulfillObjectWaiters(handle: param)
-        case LmxEvent.deviceStray:
-            handleConnectionLost("相机失联（事件 0x10000010）")
-        case LmxEvent.dataTransferProg:
+        case LmxEvent.deviceStray, LmxEvent.deviceStrayAlt:
+            handleConnectionLost("相机失联（事件 0x\(String(cbid, radix: 16))）")
+        case LmxEvent.dataTransferProg, LmxEvent.dataTransferProgLegacy:
             emit(.transferProgress(percent: param))
         case LmxEvent.storeAdded:
-            Log.camera.info("事件：存储卡插入")
+            Log.camera.info("事件：存储卡插入 storageID=\(param)")
+            emit(.storeAdded(storageID: param))
+            Task { await self.refreshStatus() }   // 事件线程外立刻刷一份
         case LmxEvent.storeRemoved:
-            Log.camera.warn("事件：存储卡拔出")
+            Log.camera.warn("事件：存储卡拔出 storageID=\(param)")
+            emit(.storeRemoved(storageID: param))
+        case LmxEvent.storageInfoChanged:
+            Log.camera.info("事件：存储信息变更 storageID=\(param)")
+            Task { await self.refreshStatus() }
         default:
             Log.camera.debug("事件 cbid=\(lmxErrHex(cbid)) param=\(param)")
         }
@@ -470,20 +593,50 @@ public actor LumixCameraService: CameraServicing {
         // 清 pending：上一次遗留的等待者一律作废
         failAllObjectWaiters(BoothError.captureFailed("被新一次拍照取代"))
 
-        Log.camera.info("拍照：StilLCapture_Single")
-        guard lib.StilLCaptureSingle(uuid) != 0 else {
-            Log.camera.error("StilLCapture_Single 返回 0")
-            throw BoothError.captureFailed("StilLCapture_Single 失败")
+        // 拍照+下载期间独占库：暂停 LiveView 取帧与状态轮询
+        libraryBusy = true
+        defer { libraryBusy = false }
+
+        // E2（官方对齐）：拍照走 Rec_Ctrl_Release one_shot（PTP 0x9404）。
+        // 官方主程序从未调用过 StilLCapture_Single（docs/lumix-tether-analysis 04/06），
+        // 它是库暴露的未验证路径——恰是历次拍照 SIGBUS 崩溃点，弃用。
+        var ctrl = LmxRecCtrl()
+        ctrl.param = 0x3000011          // one_shot：单张全按
+        var capErr: UInt32 = 0
+        Log.camera.info("拍照：Rec_Ctrl_Release one_shot（官方路径，已暂停 LiveView/状态轮询）")
+        guard LmxDriver.shared.sync({ lib.RecCtrlRelease(&ctrl, uuid, &capErr) }) != 0 else {
+            Log.camera.error("Rec_Ctrl_Release 失败 err=\(lmxErrHex(capErr))")
+            throw BoothError.captureFailed("Rec_Ctrl_Release 失败 err=\(lmxErrHex(capErr))")
         }
 
-        // 等 ObjectAdded（超时由配置控制，默认 10s）
-        let handle = try await waitObjectAdded(timeout: config.captureTimeoutSec)
-        Log.camera.info("收到 ObjectAdded handle=\(handle)，开始下载")
+        // 等 ObjectAdded；RAW+JPEG 双落卡时官方下载器只取 JPEG（Get_Object 整包），
+        // RAW 走 Get_Partial_Object 分段——我们同理：跳过非 JPEG 对象，只下载 JPEG。
+        // 若相机设为仅 RAW，会在超时后报错提示切回 JPEG。
+        let deadline = Date().addingTimeInterval(config.captureTimeoutSec)
+        var handle: UInt32 = 0
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw BoothError.captureTimeout }
+            let h = try await waitObjectAdded(timeout: remaining)
+            var fmt: UInt32 = 0
+            var fmtErr: UInt32 = 0
+            if LmxDriver.shared.sync({ lib.GetObjectFormatType(h, &fmt, uuid, &fmtErr) }) != 0,
+               fmt == 1 || fmt == 2 {   // 库内部枚举：0x3800/0x3801/0x3808 各代 JPEG → 1/2；0x3001 RAW → 3（反编译 0x18bd0）
+                handle = h
+                break
+            }
+            Log.camera.info("跳过非 JPEG 对象 handle=\(h) format=\(fmt)（3=RAW/4-5=视频），继续等 JPEG 落卡")
+        }
+        Log.camera.info("收到 JPEG ObjectAdded handle=\(handle)，开始下载")
         return try downloadObject(handle: handle, lib: lib, uuid: uuid)
     }
 
-    /// 阻塞等 ObjectAdded 回调；超时抛 captureTimeout
+    /// 阻塞等 ObjectAdded 回调；超时抛 captureTimeout。
+    /// 无等待者期间到达的 handle 先存 pending（拍照方跳过 RAW 重等 JPEG 时不会丢 JPEG 事件）
     private func waitObjectAdded(timeout: Double) async throws -> UInt32 {
+        if !pendingObjectHandles.isEmpty {
+            return pendingObjectHandles.removeFirst()
+        }
         let id = UUID()
         return try await withCheckedThrowingContinuation { continuation in
             let timeoutTask = Task { [weak self] in
@@ -504,6 +657,10 @@ public actor LumixCameraService: CameraServicing {
     private func fulfillObjectWaiters(handle: UInt32) {
         let waiters = objectWaiters
         objectWaiters.removeAll()
+        if waiters.isEmpty {
+            pendingObjectHandles.append(handle)   // 暂无等待者（如正跳过 RAW）：存起来不丢
+            return
+        }
         for w in waiters.values {
             w.timeoutTask.cancel()
             w.continuation.resume(returning: handle)
@@ -511,6 +668,7 @@ public actor LumixCameraService: CameraServicing {
     }
 
     private func failAllObjectWaiters(_ error: any Error) {
+        pendingObjectHandles.removeAll()
         let waiters = objectWaiters
         objectWaiters.removeAll()
         for w in waiters.values {
@@ -524,32 +682,52 @@ public actor LumixCameraService: CameraServicing {
                                 uuid: UnsafeMutablePointer<CChar>) throws -> CameraCapture {
         var err: UInt32 = 0
 
-        // 大小
+        // 大小 + 格式（崩溃诊断关键信息，务必先落盘）
         var size: UInt64 = 0
-        guard lib.GetObjectDataSize(handle, &size, uuid, &err) != 0, size > 0 else {
+        guard LmxDriver.shared.sync({ lib.GetObjectDataSize(handle, &size, uuid, &err) }) != 0, size > 0 else {
             Log.camera.error("Get_Object_DataSize 失败 handle=\(handle) err=\(lmxErrHex(err))")
             throw BoothError.captureFailed("Get_Object_DataSize err=\(lmxErrHex(err))")
         }
+        var dlFmt: UInt32 = 0
+        _ = LmxDriver.shared.sync { lib.GetObjectFormatType(handle, &dlFmt, uuid, &err) }
+        Log.camera.info("下载对象 handle=\(handle) format=\(lmxErrHex(dlFmt)) size=\(size)")
 
         // 文件名（失败不阻断，用 handle 兜底命名）
         var nameStr = "P\(handle).JPG"
         var ptpName = LmxPTPArrayString()
         err = 0
-        if lib.GetObjectFileName(handle, &ptpName, uuid, &err) != 0 {   // 裸指针传结构体，布局见 LmxTypes
+        if LmxDriver.shared.sync({ lib.GetObjectFileName(handle, &ptpName, uuid, &err) }) != 0 {   // 裸指针传结构体，布局见 LmxTypes
             let n = ptpName.string()
             if !n.isEmpty { nameStr = n }
         } else {
             Log.camera.warn("Get_Object_FileName 失败 err=\(lmxErrHex(err))，使用兜底名 \(nameStr)")
         }
 
-        // 下载全图
+        // 下载全图：小 JPEG 走官方整包 Get_Object；大文件走官方 RAW 同款
+        // Get_Partial_Object 分段（历次 SIGBUS 均发生在长事务中，分段缩短单次事务）
         let bufSize = UInt32(min(size, UInt64(UInt32.max)))
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: Int(bufSize))
         defer { buf.deallocate() }
         err = 0
-        guard lib.GetObject(handle, buf, bufSize, uuid, &err) != 0 else {
-            Log.camera.error("Get_Object 失败 handle=\(handle) err=\(lmxErrHex(err))")
-            throw BoothError.captureFailed("Get_Object err=\(lmxErrHex(err))")
+        if bufSize <= 8 << 20 {
+            guard LmxDriver.shared.sync({ lib.GetObject(handle, buf, bufSize, uuid, &err) }) != 0 else {
+                Log.camera.error("Get_Object 失败 handle=\(handle) err=\(lmxErrHex(err))")
+                throw BoothError.captureFailed("Get_Object err=\(lmxErrHex(err))")
+            }
+        } else {
+            let chunkSize: UInt32 = 1 << 20   // 1MB/段，段间控制台可观察进度
+            var offset: UInt32 = 0
+            while offset < bufSize {
+                let n = min(chunkSize, bufSize - offset)
+                err = 0
+                // 参数序（反编译 0x3b9ec）：handle, buf, offset, size——a3=offset, a4=size（a4≠0）
+                guard LmxDriver.shared.sync({ lib.GetPartialObject(handle, buf + Int(offset), offset, n, uuid, &err) }) != 0 else {
+                    Log.camera.error("Get_Partial_Object 失败 handle=\(handle) offset=\(offset) err=\(lmxErrHex(err))")
+                    throw BoothError.captureFailed("Get_Partial_Object err=\(lmxErrHex(err))")
+                }
+                offset += n
+                Log.camera.debug("分段下载 handle=\(handle) \(offset)/\(bufSize)")
+            }
         }
         let data = Data(bytes: buf, count: Int(bufSize))
         Log.camera.info("下载完成: \(nameStr) \(data.count) 字节")

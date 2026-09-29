@@ -81,6 +81,37 @@ public struct LmxRecCtrl {
     }
 }
 
+/// _tag_LMX_STRUCT_BATTERY_INFO — GetBatteryInfo 输出（PTP vendor 0x9414）。
+/// 逆向自 LmxExt_GetBatteryInfo_from_Buf @0x42400（逐字段拷贝）：
+///   {u32 tag; u32 size; u16 f[4]} 共 16 字节。
+/// 4 个 u16 的语义库内无映射（主程序才消费），全量上抛由上层启发式判定。
+public struct LmxBatteryInfo {
+    public var tag: UInt32      // 响应块 tag（0x1600B0D1）
+    public var size: UInt32     // 响应块长度
+    public var fields: (UInt16, UInt16, UInt16, UInt16)
+
+    public init() {
+        tag = 0; size = 0; fields = (0, 0, 0, 0)
+    }
+
+    /// 从 16 字节原始缓冲区解析（库写入后的结构体直接重解释）
+    public static func parse(_ raw: UnsafeRawPointer) -> LmxBatteryInfo {
+        var v = LmxBatteryInfo()
+        v.tag = raw.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
+        v.size = raw.loadUnaligned(fromByteOffset: 4, as: UInt32.self)
+        v.fields = (raw.loadUnaligned(fromByteOffset: 8, as: UInt16.self),
+                    raw.loadUnaligned(fromByteOffset: 10, as: UInt16.self),
+                    raw.loadUnaligned(fromByteOffset: 12, as: UInt16.self),
+                    raw.loadUnaligned(fromByteOffset: 14, as: UInt16.self))
+        return v
+    }
+
+    /// Swift 侧访问用数组视图
+    public var fieldArray: [UInt16] {
+        [fields.0, fields.1, fields.2, fields.3]
+    }
+}
+
 // MARK: - CONNECT_DEVICE_INFO 原始缓冲区解析
 
 /// CONNECT_DEVICE_INFO 布局（GetPnPDeviceInfo 逆向 + 主程序读取点验证）：
@@ -141,16 +172,22 @@ public enum LmxDeviceInfoParser {
     }
 }
 
-// MARK: - 事件 ID / 错误码（lmx.py L29-45）
+// MARK: - 事件 ID / 错误码
 
+/// 事件 CBID（Send_NotifyMsg_* 里 Get_CBID_from_CBList() 的第一参数，
+/// 逆向自 libLmxptpif v2.12 @0x44554/0x446FC/0x44808/0x445F4）。
+/// ⚠ lmx.py 旧值 0x0E000254/57 是 PTP 标准事件码，注册后不会被触发，已修正。
 public enum LmxEvent {
-    public static let objectAdded: UInt32 = 0x10000040       // 照片落卡：param=object handle
-    public static let dataTransferProg: UInt32 = 0x10000081  // 下载进度
-    public static let deviceStray: UInt32 = 0x10000010       // 相机拔出/失联
-    public static let deviceReset: UInt32 = 0x10000001
-    public static let reqObjTransfer: UInt32 = 0x10000100    // 相机请求传输（"PC 保存"模式）
-    public static let storeAdded: UInt32 = 0x0E000257
-    public static let storeRemoved: UInt32 = 0x0E000254
+public static let objectAdded: UInt32 = 0x10000040       // 照片落卡：param=object handle
+public static let dataTransferProg: UInt32 = 0x11000000  // 下载进度（E6 勘误：Send_NotifyMsg_DataTransferProgress @0x450c4 硬编码）
+public static let dataTransferProgLegacy: UInt32 = 0x10000081 // 旧值，双监听兼容
+public static let deviceStray: UInt32 = 0x10000010       // 相机拔出/失联（USB 实测有效）
+public static let deviceStrayAlt: UInt32 = 0x1FF20001   // 失联库内常量路径，双监听更稳
+public static let deviceReset: UInt32 = 0x1FF20003      // 相机复位（E6 勘误；旧值 0x10000001 与 storeRemoved 撞值）
+public static let reqObjTransfer: UInt32 = 0x10000043   // 相机请求传输（E6 勘误：真值；旧值 0x10000100 在静态表中不存在）
+public static let storeAdded: UInt32 = 0x10000000         // 存储卡插入：param=storageID
+public static let storeRemoved: UInt32 = 0x10000001      // 存储卡拔出：param=storageID
+public static let storageInfoChanged: UInt32 = 0x10000002 // 存储信息变更（换卡/满）：param=storageID
 }
 
 public enum LmxError {

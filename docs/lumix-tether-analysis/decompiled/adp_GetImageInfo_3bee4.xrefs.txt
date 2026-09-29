@@ -1,0 +1,2 @@
+  0x10003b4b0 in __ZN11lumixtether13DeviceAdapter29registerEventIdStillImageInfoEjj
+  0x1001072bc in sub_1000F6768

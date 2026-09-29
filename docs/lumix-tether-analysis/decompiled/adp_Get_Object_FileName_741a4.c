@@ -1,0 +1,51 @@
+// __ZN11lumixtether13DeviceAdapter36adp_LMX_func_api_Get_Object_FileNameEjP32_tag_LMX_STRUCT_PTP_ARRAY_STRING7QString @ 0x1000741a4 (imagebase-relative)
+bool __fastcall lumixtether::DeviceAdapter::adp_LMX_func_api_Get_Object_FileName(
+        __int64 a1,
+        __int64 a2,
+        __int64 a3,
+        __int64 a4)
+{
+  void *v8; // x0
+  atomic_uint *v9; // x8
+  atomic_uint *v10; // x9
+  int Object_FileName; // w21
+  atomic_uint *v12; // x8
+  atomic_uint *v13; // x9
+  atomic_uint *v15[3]; // [xsp+8h] [xbp-68h] BYREF
+  atomic_uint *v16[3]; // [xsp+20h] [xbp-50h] BYREF
+  atomic_uint *v17[3]; // [xsp+38h] [xbp-38h] BYREF
+
+  if ( *(_QWORD *)(a4 + 8) )
+    v8 = *(void **)(a4 + 8);
+  else
+    v8 = &QString::_empty;
+  if ( !(unsigned int)QString::compare_helper(v8, *(_QWORD *)(a4 + 16), &unk_10014269A, -1, 1) )
+    QString::operator=(a4, *(_QWORD *)(a1 + 1120) + 307848LL);
+  v9 = *(atomic_uint **)a4;
+  v10 = *(atomic_uint **)(a4 + 8);
+  v17[0] = v9;
+  v17[1] = v10;
+  v17[2] = *(atomic_uint **)(a4 + 16);
+  if ( v9 )
+    atomic_fetch_add(v9, 1u);
+  lumixtether::DeviceAdapter::dev_mutex_lock(a1, v17);
+  if ( v17[0] && atomic_fetch_add(v17[0], 0xFFFFFFFF) == 1 )
+    QArrayData::deallocate(v17[0], 2, 8);
+  QString::toLocal8Bit_helper(v16, *(_QWORD *)(a4 + 8), *(_QWORD *)(a4 + 16));
+  if ( !v16[0] || *v16[0] >= 2 )
+    QByteArray::reallocData(v16, v16[2], 1);
+  Object_FileName = LMX_func_api_Get_Object_FileName(a2, a3, v16[1], 0);
+  if ( v16[0] && atomic_fetch_add(v16[0], 0xFFFFFFFF) == 1 )
+    QArrayData::deallocate(v16[0], 1, 8);
+  v12 = *(atomic_uint **)a4;
+  v13 = *(atomic_uint **)(a4 + 8);
+  v15[0] = v12;
+  v15[1] = v13;
+  v15[2] = *(atomic_uint **)(a4 + 16);
+  if ( v12 )
+    atomic_fetch_add(v12, 1u);
+  lumixtether::DeviceAdapter::dev_mutex_unlock(a1, v15);
+  if ( v15[0] && atomic_fetch_add(v15[0], 0xFFFFFFFF) == 1 )
+    QArrayData::deallocate(v15[0], 2, 8);
+  return Object_FileName != 0;
+}

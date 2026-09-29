@@ -1,0 +1,5 @@
+  0x10000a20c in __ZN11lumixtether12DeviceSearch17ConnectThreadFuncEv
+  0x10000a238 in __ZN11lumixtether12DeviceSearch17ConnectThreadFuncEv
+  0x10000a258 in __ZN11lumixtether12DeviceSearch17ConnectThreadFuncEv
+  0x10000a310 in __ZN11lumixtether12DeviceSearch17ConnectThreadFuncEv
+  0x1000f8184 in sub_1000F6768

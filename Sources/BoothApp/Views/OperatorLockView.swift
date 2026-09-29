@@ -5,6 +5,7 @@ import BoothUI
 // ============================================================
 // OperatorLockView — 操作员门禁锁屏（进入操作员页先验证）
 //  - 验证：4-6 位数字 PIN（触屏数字键盘 + 物理键盘均可输入）
+//  - 物理键盘：视图自身 focusable + onKeyPress 承接数字/退格/回车
 //  - 首次引导：无 PIN 时进入「设置 PIN / 暂不设置」双路流程
 //  - 防爆破反馈：剩余尝试次数、锁定倒计时
 //  - pendingQuit：退出保护拦截后，验证通过即退出；Esc 取消
@@ -24,7 +25,8 @@ struct OperatorLockView: View {
     @State private var feedback: String?
     @State private var shakeTrigger = 0
     @State private var showSkipConfirm = false
-    @FocusState private var fieldFocused: Bool
+    /// 物理键盘接收焦点（点键盘/点圆点后也要回焦，否则敲键无响应）
+    @FocusState private var keyboardFocused: Bool
 
     private let pinRange = 4...6
 
@@ -46,9 +48,30 @@ struct OperatorLockView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.backgroundColor.ignoresSafeArea())
-        .onAppear { fieldFocused = true }
+        .onAppear { keyboardFocused = true }
         // 锁定倒计时结束/进行中，让界面自己动起来刷新剩余秒数文本
         .background(TimelineView(.periodic(from: .now, by: 0.5)) { _ in Color.clear })
+        // 物理键盘：数字 / 退格 / 回车（其余键忽略，Esc 继续冒泡给 RootView）
+        .focusable()
+        .focused($keyboardFocused)
+        .focusEffectDisabled()
+        .onKeyPress { press in
+            guard press.modifiers.isEmpty else { return .ignored }
+            switch press.key {
+            case KeyEquivalent.delete:
+                if !entered.isEmpty { entered.removeLast(); feedback = nil }
+                return .handled
+            case KeyEquivalent.return:
+                submitCurrent()
+                return .handled
+            default:
+                guard let c = press.characters.first, c.isASCII, c.isNumber,
+                      entered.count < 6 else { return .ignored }
+                entered.append(c)
+                feedback = nil
+                return .handled
+            }
+        }
     }
 
     // MARK: - 头部
@@ -73,21 +96,11 @@ struct OperatorLockView: View {
 
     private var subtitleText: String {
         if gate.pendingQuit { return "验证通过后将退出应用；按 Esc 可取消" }
-        if gate.hasPIN { return "输入 4-6 位数字 PIN 进入操作员后台" }
+        if gate.hasPIN { return "输入 4-6 位数字 PIN（物理键盘 / 点按均可）进入操作员后台" }
         return "保护无人值守时的配置；也可以选择暂不设置"
     }
 
-    // MARK: - PIN 输入框（物理键盘）
-
-    /// 隐藏的 SecureField 承接物理键盘输入（自动获得焦点）；
-    /// 屏显圆点由 dots 渲染，SecureField 本体透明
-    private var hiddenPINField: some View {
-        SecureField("", text: $entered)
-            .focused($fieldFocused)
-            .opacity(0.005)
-            .frame(width: 1, height: 1)
-            .onSubmit { submitCurrent() }
-    }
+    // MARK: - PIN 屏显圆点（点按可把焦点拿回键盘输入）
 
     private var dots: some View {
         HStack(spacing: 16) {
@@ -99,7 +112,7 @@ struct OperatorLockView: View {
             }
         }
         .modifier(ShakeEffect(travel: 10, shakes: 4, animatableData: CGFloat(shakeTrigger)))
-        .overlay(hiddenPINField)
+        .onTapGesture { keyboardFocused = true }
     }
 
     // MARK: - 验证流程（已有 PIN）
@@ -218,6 +231,7 @@ struct OperatorLockView: View {
     }
 
     private func tapKey(_ key: String) {
+        keyboardFocused = true   // 点按后把焦点拿回，物理键盘继续可用
         switch key {
         case "删除":
             if !entered.isEmpty { entered.removeLast() }
@@ -232,7 +246,7 @@ struct OperatorLockView: View {
     // MARK: - 提交
 
     private func submitCurrent() {
-        fieldFocused = true
+        keyboardFocused = true
         guard pinRange.contains(entered.count) else {
             feedback = "PIN 需为 4-6 位数字"
             shake()

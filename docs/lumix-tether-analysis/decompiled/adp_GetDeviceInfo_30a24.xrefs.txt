@@ -1,0 +1,3 @@
+  0x10002a7b8 in __ZN11lumixtether13DeviceAdapter13getCameraInfoEi7QStringS1_bPNS0_10CameraInfoE
+  0x10003022c in __ZN11lumixtether13DeviceAdapter58adp_LMX_func_api_Search_and_Connect_DEVICE_TYPE_REMOTE_STDEb
+  0x100107478 in sub_1000F6768

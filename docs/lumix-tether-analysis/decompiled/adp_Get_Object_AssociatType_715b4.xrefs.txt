@@ -1,0 +1,5 @@
+  0x1000c1c30 in __ZN9ObjectAdd7saveRAWEj
+  0x1000c2300 in __ZN9ObjectAdd10saveObjectEj
+  0x1000c8398 in __ZN11lumixtether10ObjectCopy22startObjectReqTransferEi7QString
+  0x1000ff078 in sub_1000F6768
+  0x100104744 in sub_1000F6768

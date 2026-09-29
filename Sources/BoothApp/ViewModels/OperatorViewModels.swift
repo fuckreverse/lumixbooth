@@ -254,20 +254,47 @@ final class OpLogsViewModel: ObservableObject {
 
     /// 展示上限（防长列表卡顿）
     private let displayCap = 500
+    /// 待合并的增量缓冲 + 定时刷新任务
+    private var pending: [LogEntry] = []
+    private var flushTask: Task<Void, Never>?
 
     static let categories = ["camera", "vision", "session", "imaging", "print", "server", "ui", "core"]
 
     func start() {
-        entries = Array(LogStore.shared.recent.suffix(displayCap))
-        // 订阅增量（onAppend 在 utility 队列回调，跳回主线程）
+        entries = LogStore.shared.recentSnapshot(maxCount: displayCap)
+        // 订阅增量（onAppend 在 utility 队列锁外回调，跳回主线程攒批）
         LogStore.shared.onAppend = { [weak self] entry in
-            Task { @MainActor in
-                guard let self else { return }
-                self.entries.append(entry)
-                if self.entries.count > self.displayCap {
-                    self.entries.removeFirst(self.entries.count - self.displayCap)
-                }
-            }
+            Task { @MainActor in self?.enqueue(entry) }
+        }
+    }
+
+    /// 离开操作员页时退订（继续留着只会白攒批）
+    func stop() {
+        LogStore.shared.onAppend = nil
+        flushTask?.cancel()
+        flushTask = nil
+        pending.removeAll()
+    }
+
+    /// 增量先攒进 pending，每 0.5s 合并刷一次 —— Mock 相机逐帧打 debug
+    /// 日志（30+ 条/秒），逐条刷 @Published 会把主线程打成渲染洪水
+    private func enqueue(_ entry: LogEntry) {
+        pending.append(entry)
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self else { return }
+            self.flushTask = nil
+            self.flush()
+        }
+    }
+
+    private func flush() {
+        guard !pending.isEmpty else { return }
+        entries.append(contentsOf: pending)
+        pending.removeAll()
+        if entries.count > displayCap {
+            entries.removeFirst(entries.count - displayCap)
         }
     }
 

@@ -160,6 +160,247 @@ public struct CountdownNumber: View {
     }
 }
 
+// MARK: - 操作员页控件（替代系统原生样式的主题化组件）
+
+/// 迷你胶囊按钮（页内联操作：刷新 / 重试 / 移除 / Finder 直达）
+public struct BoothMiniButton: View {
+    @Environment(\.boothTheme) private var theme
+    let title: String
+    let tint: Color
+    let action: () -> Void
+
+    public init(_ title: String, tint: Color? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.tint = tint ?? .clear   // nil 时在 body 里回退主题色
+        self.action = action
+        self.useThemeTint = tint == nil
+    }
+
+    private let useThemeTint: Bool
+
+    public var body: some View {
+        let color = useThemeTint ? theme.accentColor : tint
+        return Button(action: action) {
+            Text(title)
+                .font(theme.bodyFont(15, weight: .bold))
+                .padding(.horizontal, 14).padding(.vertical, 7)
+        }
+        .foregroundStyle(color)
+        .background(color.opacity(0.12), in: Capsule())
+        .buttonStyle(BoothBounceStyle())
+    }
+}
+
+/// 主题化分段选择器（替代系统 .segmented Picker）
+public struct BoothSegmented<T: Hashable>: View {
+    @Environment(\.boothTheme) private var theme
+    public struct Option {
+        public let value: T
+        public let title: String
+        public init(_ value: T, _ title: String) { self.value = value; self.title = title }
+    }
+    let options: [Option]
+    @Binding var selection: T
+
+    public init(_ options: [Option], selection: Binding<T>) {
+        self.options = options
+        self._selection = selection
+    }
+
+    public var body: some View {
+        HStack(spacing: 4) {
+            ForEach(options, id: \.value) { opt in
+                let selected = opt.value == selection
+                Button {
+                    withAnimation(theme.bounce) { selection = opt.value }
+                } label: {
+                    Text(opt.title)
+                        .font(theme.bodyFont(15, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(selected ? theme.accentColor : Color.clear, in: Capsule())
+                }
+                .foregroundStyle(selected ? theme.textOnAccentColor : theme.textColor)
+                .buttonStyle(BoothBounceStyle())
+            }
+        }
+        .padding(4)
+        .background(theme.backgroundSecondaryColor, in: Capsule())
+        .overlay(Capsule().stroke(theme.accentSecondaryColor, lineWidth: 1.5))
+    }
+}
+
+/// 主题化开关（替代系统 Toggle：整行可点 + 自绘胶囊滑块）
+public struct BoothToggle: View {
+    @Environment(\.boothTheme) private var theme
+    let title: String
+    @Binding var isOn: Bool
+
+    public init(_ title: String, isOn: Binding<Bool>) {
+        self.title = title
+        self._isOn = isOn
+    }
+
+    public var body: some View {
+        Button {
+            withAnimation(theme.bounce) { isOn.toggle() }
+        } label: {
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(theme.bodyFont(17))
+                    .foregroundStyle(theme.textColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                track
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var track: some View {
+        ZStack {
+            Capsule().fill(isOn ? theme.accentColor : theme.backgroundSecondaryColor)
+            Circle()
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                .frame(width: 22, height: 22)
+                .offset(x: isOn ? 12 : -12)
+        }
+        .frame(width: 52, height: 30)
+        .overlay(Capsule().stroke(theme.accentSecondaryColor, lineWidth: 1.5))
+    }
+}
+
+/// 主题化步进器（替代系统 Stepper：− 值 +）
+public struct BoothStepper: View {
+    @Environment(\.boothTheme) private var theme
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let step: Int
+    let format: (Int) -> String
+
+    public init(value: Binding<Int>, in range: ClosedRange<Int>,
+                step: Int = 1, format: @escaping (Int) -> String = { "\($0)" }) {
+        self._value = value
+        self.range = range
+        self.step = step
+        self.format = format
+    }
+
+    public var body: some View {
+        HStack(spacing: 0) {
+            stepButton("−") { value = max(range.lowerBound, value - step) }
+                .opacity(value <= range.lowerBound ? 0.35 : 1)
+            Rectangle().fill(theme.accentSecondaryColor).frame(width: 1, height: 24)
+            Text(format(value))
+                .font(theme.bodyFont(16, weight: .bold))
+                .foregroundStyle(theme.textColor)
+                .monospacedDigit()
+                .frame(minWidth: 110)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Rectangle().fill(theme.accentSecondaryColor).frame(width: 1, height: 24)
+            stepButton("+") { value = min(range.upperBound, value + step) }
+                .opacity(value >= range.upperBound ? 0.35 : 1)
+        }
+        .background(theme.backgroundSecondaryColor,
+                    in: RoundedRectangle(cornerRadius: theme.cornerRadiusSmall, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: theme.cornerRadiusSmall, style: .continuous)
+            .stroke(theme.accentSecondaryColor, lineWidth: 1.5))
+    }
+
+    private func stepButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(symbol)
+                .font(theme.bodyFont(18, weight: .bold))
+                .foregroundStyle(theme.accentColor)
+                .frame(width: 38, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(BoothBounceStyle())
+    }
+}
+
+/// 主题化输入框（替代 .roundedBorder 原生文本框；聚焦描主色边）
+public struct BoothTextField: View {
+    @Environment(\.boothTheme) private var theme
+    let placeholder: String
+    @Binding var text: String
+    let secure: Bool
+    let onSubmit: (() -> Void)?
+    @FocusState private var focused: Bool
+
+    public init(_ placeholder: String, text: Binding<String>,
+                secure: Bool = false, onSubmit: (() -> Void)? = nil) {
+        self.placeholder = placeholder
+        self._text = text
+        self.secure = secure
+        self.onSubmit = onSubmit
+    }
+
+    public var body: some View {
+        Group {
+            if secure {
+                SecureField(placeholder, text: $text)
+            } else {
+                TextField(placeholder, text: $text)
+            }
+        }
+        .focused($focused)
+        .font(theme.bodyFont(16))
+        .foregroundStyle(theme.textColor)
+        .onSubmit { onSubmit?() }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(theme.backgroundSecondaryColor,
+                    in: RoundedRectangle(cornerRadius: theme.cornerRadiusSmall, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: theme.cornerRadiusSmall, style: .continuous)
+            .stroke(focused ? theme.accentColor : theme.accentSecondaryColor,
+                    lineWidth: focused ? 2 : 1.5))
+    }
+}
+
+/// 主题化滑杆（替代系统 Slider：胶囊轨道 + 可拖圆钮）
+public struct BoothSlider: View {
+    @Environment(\.boothTheme) private var theme
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    public init(value: Binding<Double>, in range: ClosedRange<Double>) {
+        self._value = value
+        self.range = range
+    }
+
+    private var fraction: CGFloat {
+        let span = range.upperBound - range.lowerBound
+        return span <= 0 ? 0 : CGFloat((value - range.lowerBound) / span)
+    }
+
+    public var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule().fill(theme.backgroundSecondaryColor)
+                Capsule().fill(theme.accentColor).frame(width: max(18, w * fraction))
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                    .frame(width: 22, height: 22)
+                    .offset(x: min(max(0, w * fraction - 11), max(0, w - 22)))
+            }
+            .frame(height: geo.size.height)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                let f = min(max(0, g.location.x / max(w, 1)), 1)
+                value = range.lowerBound + (range.upperBound - range.lowerBound) * Double(f)
+            })
+        }
+        .frame(height: 30)
+        .overlay(Capsule().stroke(theme.accentSecondaryColor, lineWidth: 1.5))
+    }
+}
+
 // MARK: - 预览
 
 #Preview("组件") {

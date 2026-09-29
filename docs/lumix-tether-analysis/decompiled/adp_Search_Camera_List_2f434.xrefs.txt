@@ -1,0 +1,3 @@
+  0x1000de11c in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv
+  0x1000fba2c in sub_1000F6768
+  0x1000fd074 in sub_1000F6768

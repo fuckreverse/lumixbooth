@@ -12,7 +12,7 @@ import Foundation
 /// C 事件回调原型：int cb(uint cbid, uint param, char* uuid)
 public typealias LmxNotifyCallback = @convention(c) (UInt32, UInt32, UnsafeMutablePointer<CChar>?) -> Int32
 
-// 非线程安全库，但本类只持有只读函数指针；调用串行化由 LumixCameraService actor 保证
+// 非线程安全库，本类只持有只读函数指针；所有库调用必须经 LmxDriver 专用线程执行（见文件末尾）
 public final class LmxLibrary: @unchecked Sendable {
 
     // MARK: - 函数指针类型（@convention(c)，签名以 ANALYSIS.md §3 为准）
@@ -44,8 +44,16 @@ public final class LmxLibrary: @unchecked Sendable {
                                                    UnsafeMutablePointer<CChar>, UnsafeMutablePointer<UInt32>) -> Int32
     public typealias GetObjectFn = @convention(c) (UInt32, UnsafeMutablePointer<UInt8>, UInt32,
                                                    UnsafeMutablePointer<CChar>, UnsafeMutablePointer<UInt32>) -> Int32
+    // Get_Partial_Object 参数序（反编译 0x3b9ec）：handle, buf, offset, size（size 不可为 0）
+    public typealias GetPartialObjectFn = @convention(c) (UInt32, UnsafeMutablePointer<UInt8>, UInt32, UInt32,
+                                                          UnsafeMutablePointer<CChar>, UnsafeMutablePointer<UInt32>) -> Int32
     public typealias GetStatusFn = @convention(c) (UnsafeMutablePointer<UInt16>, UnsafeMutablePointer<CChar>,
                                                    UnsafeMutablePointer<UInt32>) -> Int32
+    // GetBatteryInfo / GetFreeSpaceInSec（电量/存储轮询，2026-09 逆向确认）
+    public typealias GetBatteryInfoFn = @convention(c) (UnsafeMutableRawPointer, UnsafeMutablePointer<CChar>,
+                                                        UnsafeMutablePointer<UInt32>) -> Int32
+    public typealias GetFreeSpaceFn = @convention(c) (UnsafeMutablePointer<UInt32>, UnsafeMutablePointer<CChar>,
+                                                      UnsafeMutablePointer<UInt32>) -> Int32
 
     // MARK: - 已解析符号（mangled 名抄自 lmx.py L94-146）
 
@@ -65,7 +73,10 @@ public final class LmxLibrary: @unchecked Sendable {
     public let GetObjectDataSize: GetDataSizeFn         // _Z32LMX_func_api_Get_Object_DataSizejPmPcPj
     public let GetObjectFormatType: GetFormatFn         // _Z34LMX_func_api_Get_Object_FormatTypejPjPcS_
     public let GetObject: GetObjectFn                   // _Z23LMX_func_api_Get_ObjectjPhjPcPj
+    public let GetPartialObject: GetPartialObjectFn     // _Z31LMX_func_api_Get_Partial_ObjectjPhjjPcPj（官方 RAW 分段下载路径）
     public let GetCameraStatus: GetStatusFn             // _Z28LMX_func_api_GetCameraStatusPtPcPj
+    public let GetBatteryInfo: GetBatteryInfoFn         // _Z27LMX_func_api_GetBatteryInfoP28_tag_LMX_STRUCT_BATTERY_INFOPcPj
+    public let GetFreeSpaceInSec: GetFreeSpaceFn        // _Z30LMX_func_api_GetFreeSpaceInSecPjPcS_
 
     /// 实际加载的 dylib 路径（诊断日志用）
     public let path: String
@@ -102,7 +113,10 @@ public final class LmxLibrary: @unchecked Sendable {
         ("_Z32LMX_func_api_Get_Object_DataSizejPmPcPj", "LMX_func_api_Get_Object_DataSize"),
         ("_Z34LMX_func_api_Get_Object_FormatTypejPjPcS_", "LMX_func_api_Get_Object_FormatType"),
         ("_Z23LMX_func_api_Get_ObjectjPhjPcPj", "LMX_func_api_Get_Object"),
+        ("_Z31LMX_func_api_Get_Partial_ObjectjPhjjPcPj", "LMX_func_api_Get_Partial_Object"),
         ("_Z28LMX_func_api_GetCameraStatusPtPcPj", "LMX_func_api_GetCameraStatus"),
+        ("_Z27LMX_func_api_GetBatteryInfoP28_tag_LMX_STRUCT_BATTERY_INFOPcPj", "LMX_func_api_GetBatteryInfo"),
+        ("_Z30LMX_func_api_GetFreeSpaceInSecPjPcS_", "LMX_func_api_GetFreeSpaceInSec"),
     ]
 
     /// dlopen 指定路径并解析全部符号；任一符号缺失则报错并列出缺失清单
@@ -149,7 +163,10 @@ public final class LmxLibrary: @unchecked Sendable {
         self.GetObjectDataSize = cast("_Z32LMX_func_api_Get_Object_DataSizejPmPcPj")
         self.GetObjectFormatType = cast("_Z34LMX_func_api_Get_Object_FormatTypejPjPcS_")
         self.GetObject = cast("_Z23LMX_func_api_Get_ObjectjPhjPcPj")
+        self.GetPartialObject = cast("_Z31LMX_func_api_Get_Partial_ObjectjPhjjPcPj")
         self.GetCameraStatus = cast("_Z28LMX_func_api_GetCameraStatusPtPcPj")
+        self.GetBatteryInfo = cast("_Z27LMX_func_api_GetBatteryInfoP28_tag_LMX_STRUCT_BATTERY_INFOPcPj")
+        self.GetFreeSpaceInSec = cast("_Z30LMX_func_api_GetFreeSpaceInSecPjPcS_")
     }
 
     // 不 dlclose：函数指针可能被长生命周期 actor 持有，进程退出时由系统回收
@@ -194,3 +211,45 @@ public final class LmxLibrary: @unchecked Sendable {
         return paths
     }
 }
+
+// ============================================================
+// LmxDriver — libLmxptpif.dylib 调用收敛器：全部派发到【主线程】执行
+//
+//  演化（三次拍照 SIGBUS 崩溃，21:39/21:44/21:51/22:13）：
+//  1) actor 协作线程池驱动 → 崩（每个 await 后换线程，库内 Controller
+//     send: 把调用线程的 runloop/信号量写进共享 ivar，跨线程交替覆写）；
+//  2) 常驻专用线程（lmx-driver）驱动 → 连接/LiveView/状态轮询全部稳定，
+//     但 StilLCapture_Single 内部仍崩（22:13，栈损毁，同签名）。
+//     根因：库内部用 ImageCaptureCore 枚举/订阅相机事件，IC 的回调
+//     投递到【主线程 runloop】——拍照瞬间 ObjectAdded 事件在主线程上
+//     触发库内 delegate，与驱动线程正在执行的调用并发写共享状态。
+//  3) LUMIX Tether 原版（唯一端到端验证过的配置）：全部库调用在主线程。
+//     主线程自身持有运行中的 runloop，IC 回调与库调用天然串行。
+//
+//  规则：除主线程外，任何线程不得直接调用库函数（Init/Finish/各 API）。
+//  代价：库内阻塞调用（OpenSession 最长 10s、下载全图）期间主线程被阻塞，
+//  UI 会冻结——这是复刻原版执行模型的必要代价，后续如需再评估。
+// ============================================================
+
+final class LmxDriver: @unchecked Sendable {
+
+    static let shared = LmxDriver()
+    private init() {}
+
+    /// 同步执行：把 body 投递到主线程并阻塞等待结果。
+    /// 调用方已由 LumixCameraService actor 串行化，同一时刻至多一个调用在排队。
+    /// 主线程直接调用时同步执行（避免 main.async 死锁）。
+    func sync<T>(_ body: @escaping () -> T) -> T {
+        if Thread.isMainThread { return body() }
+        let box = LmxSyncBox<T>()
+        // 用 DispatchWorkItem 而非 main.async：后者的闭包被推断为 @MainActor
+        // 隔离，捕获非 Sendable 的 body 会触发 Swift 6 数据竞争检查
+        let work = DispatchWorkItem { box.v = body() }
+        DispatchQueue.main.async(execute: work)
+        work.wait()
+        return box.v!
+    }
+}
+
+/// sync() 跨线程回传结果用的盒子（主线程写、调用线程读，DispatchWorkItem.wait 保证 happens-before）
+private final class LmxSyncBox<T> { var v: T! }

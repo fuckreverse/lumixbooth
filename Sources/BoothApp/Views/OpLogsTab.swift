@@ -22,10 +22,7 @@ struct OpLogsTab: View {
                     chip(title: cat, tag: cat)
                 }
                 Spacer()
-                Button("在 Finder 显示") { vm.revealInFinder() }
-                    .buttonStyle(BoothBounceStyle())
-                    .font(theme.bodyFont(16, weight: .bold))
-                    .foregroundStyle(theme.accentColor)
+                BoothMiniButton("在 Finder 显示") { vm.revealInFinder() }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -47,10 +44,9 @@ struct OpLogsTab: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
                 .onChange(of: vm.filtered.count) { _, _ in
+                    // 每 0.5s 一批增量，不带动画直接跟底（带动画会叠帧拖慢）
                     if let last = vm.filtered.last {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
+                        proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }

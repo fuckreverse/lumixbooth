@@ -1,0 +1,5 @@
+  0x10000aadc in __ZN11lumixtether12DeviceSearch11GetSDKValueEv
+  0x10003ac0c in __ZN11lumixtether13DeviceAdapter41adp_LMX_func_api_CameraMode_GetCapabilityEv
+  0x10003f824 in __ZN11lumixtether13DeviceAdapter22registerEventIdRecInfoEjj
+  0x1000de0f8 in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv
+  0x100100e8c in sub_1000F6768

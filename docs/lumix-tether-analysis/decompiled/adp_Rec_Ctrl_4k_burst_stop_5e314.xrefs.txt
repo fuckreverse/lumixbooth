@@ -1,0 +1,2 @@
+  0x10005e154 in __ZN11lumixtether13DeviceAdapter40adp_LMX_func_api_Rec_Ctrl_4k_burst_startEv
+  0x100101d14 in sub_1000F6768

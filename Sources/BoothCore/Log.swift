@@ -57,10 +57,17 @@ public final class LogStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "booth.logstore", qos: .utility)
 
     /// 环形缓冲（App 日志查看器数据源）
-    public private(set) var recent: [LogEntry] = []
+    private(set) var recent: [LogEntry] = []
     private let recentCap = 2000
-    /// 缓冲变化回调（UI 订阅；在 utility 队列回调）
+    /// 缓冲变化回调（UI 订阅；在 utility 队列回调，锁外调用）
     public var onAppend: (@Sendable (LogEntry) -> Void)?
+
+    /// 线程安全的缓冲快照（UI 初始化拉取用；直接读 `recent` 属无锁并发访问）
+    public func recentSnapshot(maxCount: Int) -> [LogEntry] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(recent.suffix(maxCount))
+    }
 
     private init() {
         rollFileIfNeeded()
@@ -96,6 +103,7 @@ public final class LogStore: @unchecked Sendable {
         let loc = "\(URL(fileURLWithPath: file).lastPathComponent):\(line)"
         let entry = LogEntry(time: Date(), level: level, category: category, message: message, location: loc)
         queue.async { [self] in
+            var appended = false
             lock.lock()
             rollFileIfNeeded()
             if level >= fileLevel {
@@ -107,9 +115,11 @@ public final class LogStore: @unchecked Sendable {
             if level >= bufferLevel {
                 recent.append(entry)
                 if recent.count > recentCap { recent.removeFirst(recent.count - recentCap) }
-                onAppend?(entry)
+                appended = true
             }
             lock.unlock()
+            // 回调放锁外：避免订阅方在回调里再做同步等待造成死锁
+            if appended { onAppend?(entry) }
         }
     }
 

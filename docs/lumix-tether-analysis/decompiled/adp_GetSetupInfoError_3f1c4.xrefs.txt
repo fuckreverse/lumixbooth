@@ -1,0 +1,2 @@
+  0x10003f160 in __ZN11lumixtether13DeviceAdapter26registerEventIdNotifyErrorEjj7QString
+  0x100100b3c in sub_1000F6768

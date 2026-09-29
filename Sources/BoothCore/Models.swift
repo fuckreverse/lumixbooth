@@ -23,12 +23,43 @@ public enum CameraConnectionState: String, Sendable, Equatable, Codable {
     case reconnecting   // 断线重连中
 }
 
+/// 相机状态报告（电量/存储）。连接后定时轮询 + 存储事件触发刷新产生。
+/// 电池原始字段来自 PTP vendor 0x9414（16B：tag/size + 4×u16），
+/// 4 个 u16 的精确语义未在库内找到映射（主程序才消费），保守全量暴露 + 启发式百分比。
+public struct CameraStatusReport: Sendable, Equatable {
+    /// 电池原始字段（4×u16，语义待真机标定；常见布局疑为 [百分比, 电源/状态标志, 电压?, 温度?]）
+    public var batteryFields: [UInt16]
+    /// 电池百分比估算：取第一个落在 0...100 的字段；无候选时 nil
+    public var batteryPercent: Int?
+    /// 剩余可录秒数（GetFreeSpaceInSec，按当前画质折算；nil = 查询失败/不支持）
+    public var freeRecordSeconds: UInt32?
+    public var at: Date
+
+    public init(batteryFields: [UInt16], freeRecordSeconds: UInt32?, at: Date = Date()) {
+        self.batteryFields = batteryFields
+        self.freeRecordSeconds = freeRecordSeconds
+        self.at = at
+        self.batteryPercent = Self.estimatePercent(batteryFields)
+    }
+
+    /// 启发式：0-100 是百分比唯一合理区间；取首个命中字段
+    static func estimatePercent(_ fields: [UInt16]) -> Int? {
+        fields.first { Int($0) <= 100 }.map(Int.init)
+    }
+
+    /// 电量告警阈值（photobooth 无人值守场景：提前提醒换电池）
+    public var batteryLow: Bool { (batteryPercent ?? 100) <= 15 }
+}
+
 /// 相机层事件（相机专属流，SessionEngine/UI 订阅）
 public enum CameraEvent: Sendable, Equatable {
     case connected(CameraDeviceInfo)
     case disconnected(reason: String)
     case objectAdded(handle: UInt32)
     case transferProgress(percent: UInt32)
+    case statusReport(CameraStatusReport)
+    case storeAdded(storageID: UInt32)        // 存储卡插入（param=storageID）
+    case storeRemoved(storageID: UInt32)      // 存储卡拔出（param=storageID）
     case failure(String)
 }
 

@@ -1,0 +1,1 @@
+  0x10003f600 in __ZN11lumixtether13DeviceAdapter24registerEventIdObjectAddEjj7QString

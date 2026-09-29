@@ -1,0 +1,3 @@
+  0x1000d63a0 in __ZN15LiveViewManager18CmdQueueThreadFuncEv
+  0x1000d74e4 in __ZN15LiveViewManager12UpdateCameraEv
+  0x1000d9024 in __ZN15LiveViewManager11SetViewPageEb16_VIEW_SPLIT_MODEi

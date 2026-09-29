@@ -15,14 +15,8 @@ struct OpHistoryTab: View {
                     .font(theme.bodyFont(22, weight: .bold))
                     .foregroundStyle(theme.textColor)
                 Spacer()
-                Button("在 Finder 显示") { vm.revealInFinder() }
-                    .buttonStyle(BoothBounceStyle())
-                    .font(theme.bodyFont(16, weight: .bold))
-                    .foregroundStyle(theme.accentColor)
-                Button("刷新") { vm.reload() }
-                    .buttonStyle(BoothBounceStyle())
-                    .font(theme.bodyFont(16, weight: .bold))
-                    .foregroundStyle(theme.accentColor)
+                BoothMiniButton("在 Finder 显示") { vm.revealInFinder() }
+                BoothMiniButton("刷新") { vm.reload() }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)

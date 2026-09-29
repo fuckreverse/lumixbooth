@@ -1,0 +1,3 @@
+  0x100126ac4 in sub_100126AB0
+  0x100126b84 in __ZN11lumixtether21DeviceAdapterCallback11qt_metacallEN11QMetaObject4CallEiPPv
+  0x100045888 in __ZN11lumixtether13DeviceAdapter35adp_LMX_func_api_Reg_NotifyCallbackEv

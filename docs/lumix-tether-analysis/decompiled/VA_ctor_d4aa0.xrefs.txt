@@ -1,0 +1,1 @@
+  0x1000d4db8 in __ZN12VideoAdapterC1EP7QObject

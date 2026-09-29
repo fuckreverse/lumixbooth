@@ -1,0 +1,1 @@
+  0x1000d555c in __ZN15LiveViewManagerC1EP7QObject

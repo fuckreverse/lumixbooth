@@ -1,0 +1,4 @@
+  0x1000099f4 in __ZN11lumixtether12DeviceSearchD2Ev
+  0x100009bdc in __ZN11lumixtether12DeviceSearch11startSearchEbbNS0_16DeviceSearchModeE
+  0x100011808 in _main
+  0x1000f09ec in sub_1000F0848

@@ -1,0 +1,2 @@
+  0x10004186c in __ZN11lumixtether13DeviceAdapter26registerEventIdDeviceStrayEjj7QString
+  0x1000ff9e4 in sub_1000F6768

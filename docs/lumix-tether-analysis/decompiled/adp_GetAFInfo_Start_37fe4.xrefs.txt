@@ -1,0 +1,5 @@
+  0x10000a788 in __ZN11lumixtether12DeviceSearch16GetSDKCapabilityEv
+  0x100037fdc in __ZN11lumixtether13DeviceAdapter27registerEventIdWhiteBalanceEjj
+  0x10008aa24 in __ZN11lumixtether13DeviceAdapter34adp_LMX_func_api_PhotoStyle_Set_WBEi
+  0x1000ddfb0 in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv
+  0x1001069d4 in sub_1000F6768

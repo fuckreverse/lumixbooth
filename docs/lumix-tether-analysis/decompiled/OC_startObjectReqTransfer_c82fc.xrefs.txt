@@ -1,0 +1,1 @@
+  0x10003f790 in __ZN11lumixtether13DeviceAdapter32registerEventIdObjectReqTransferEjj7QString

@@ -1,0 +1,2 @@
+  0x10002b62c in __ZN11lumixtether13DeviceAdapter30camera_list_update_camera_listEb
+  0x1000f09c8 in sub_1000F0848

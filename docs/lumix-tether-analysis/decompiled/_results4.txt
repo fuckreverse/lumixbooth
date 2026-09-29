@@ -1,0 +1,6 @@
+OK 0x1000c2518 ObjectAdd_saveObject
+OK 0x1000c1d90 ObjectAdd_saveRAW
+OK 0x1000be6c4 ObjectAdd_saveMovie
+OK 0x1000c33f8 ObjectReqTransfer_saveObject
+OK 0x1000be2d0 ObjectAdd_doWork
+OK 0x1000be190 ObjectAdd_ctor

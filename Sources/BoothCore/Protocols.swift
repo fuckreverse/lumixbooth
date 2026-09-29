@@ -28,6 +28,9 @@ public protocol CameraServicing: Sendable {
     func stopLiveView() async
     /// 全按快门拍一张：阻塞到 ObjectAdded（默认 10s 超时），下载全图返回
     func capture() async throws -> CameraCapture
+    /// 立即查询一次电量/存储并广播 statusReport（连接后服务方自动轮询；
+    /// 存储插拔等事件触发时上层可主动要求刷新）
+    func refreshStatus() async
 }
 
 // MARK: - 手势 / 姿势（VisionKit 实现）

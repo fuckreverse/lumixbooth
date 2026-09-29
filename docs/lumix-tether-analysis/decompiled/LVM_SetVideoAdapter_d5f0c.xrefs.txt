@@ -1,0 +1,2 @@
+  0x10002eeec in __ZN11lumixtether13DeviceAdapter36adp_LMX_func_api_Ctrl_LiveView_StartEv
+  0x10002f33c in __ZN11lumixtether13DeviceAdapter16setLiveviewPauseEv

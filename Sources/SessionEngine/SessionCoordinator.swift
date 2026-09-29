@@ -499,10 +499,27 @@ public actor SessionCoordinator {
             case .connected:
                 Log.session.info("相机已连接/恢复，回待机待命")
                 await resetToIdle("相机恢复")
+                // 重连后恢复取景（首连失败时 startLiveView 可能没开成；
+                // photo booth 语义：相机在线即常开 LiveView）
+                do { try await camera.startLiveView() } catch {
+                    Log.session.warn("恢复 LiveView 失败: \(error.localizedDescription)")
+                }
             case .failure(let msg):
                 Log.session.error("相机错误事件: \(msg)")
             case .objectAdded, .transferProgress:
                 break // ObjectAdded 由 camera.capture() 内部等待，这里不处理
+            case .statusReport(let report):
+                // 电量/存储轮询报告：低电/可录时长告警（无人值守场景提前提醒）
+                if report.batteryLow {
+                    Log.session.warn("相机低电量\(report.batteryPercent.map { "（\($0)%）" } ?? "（未知）")，请及时更换电池")
+                }
+                if let sec = report.freeRecordSeconds, sec < 600 {
+                    Log.session.warn("存储卡剩余可录 \(sec) 秒（<10 分钟），请换卡或清理")
+                }
+            case .storeAdded(let storageID):
+                Log.session.info("存储卡已插入 storageID=\(storageID)")
+            case .storeRemoved(let storageID):
+                Log.session.warn("存储卡已拔出 storageID=\(storageID)——拍照会失败，请重新插卡")
             }
         }
     }

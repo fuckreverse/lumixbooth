@@ -1,0 +1,6 @@
+  0x10009a838 in __ZN11lumixtether13DeviceAdapter22getCopyPcMaskValByUUIDE7QString
+  0x1000c3148 in __ZN17ObjectReqTransfer10saveObjectEjjmj7QString
+  0x1000de050 in __ZN11lumixtether21DeviceAdapterCallback6doWorkEv
+  0x100100e28 in sub_1000F6768
+  0x100101450 in sub_1000F6768
+  0x1001014f8 in sub_1000F6768

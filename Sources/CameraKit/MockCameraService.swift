@@ -26,6 +26,12 @@ public actor MockCameraService: CameraServicing {
     public var captureError: (any Error)?
     /// LiveView 帧间隔（默认 ~15fps，比真机 30Hz 慢一半省 CPU）
     public var frameInterval: TimeInterval = 1.0 / 15.0
+    /// 状态轮询间隔（模拟电量递减）
+    public var statusInterval: TimeInterval = 5
+    /// 模拟初始电量百分比（每次 refreshStatus -1，夹在 0...100）
+    public var mockBatteryPercent: UInt16 = 87
+    /// 模拟可录剩余秒数
+    public var mockFreeSeconds: UInt32 = 5400
     /// 模拟设备信息
     public var mockDevice = CameraDeviceInfo(devId: 1, uuid: "MOCK-LUMIX-S5-0000",
                                              model: "DC-S5", serial: "MOCKSERIAL")
@@ -34,6 +40,7 @@ public actor MockCameraService: CameraServicing {
 
     private var state: CameraConnectionState = .disconnected
     private var liveViewTask: Task<Void, Never>?
+    private var statusTask: Task<Void, Never>?
     private var frameNumber: UInt64 = 0
     private var captureCount: UInt32 = 0
 
@@ -105,13 +112,44 @@ public actor MockCameraService: CameraServicing {
         setState(.connected)
         Log.camera.info("[Mock] 已连接 \(mockDevice.model) (\(mockDevice.uuid))")
         emit(.connected(mockDevice))
+        startStatusLoop()
+        await refreshStatus()
     }
 
     public func disconnect() async {
         liveViewTask?.cancel(); liveViewTask = nil
+        statusTask?.cancel(); statusTask = nil
         setState(.disconnected)
         Log.camera.info("[Mock] 已断开")
         emit(.disconnected(reason: "主动断开"))
+    }
+
+    // MARK: - 状态报告（电量/存储）
+
+    /// 立即广播一份状态报告（电量递减模拟 + 可录秒数）
+    public func refreshStatus() async {
+        guard state == .connected || state == .liveView else { return }
+        let pct = mockBatteryPercent
+        mockBatteryPercent = pct > 0 ? pct - 1 : 0
+        let report = CameraStatusReport(batteryFields: [pct, 0, 0, 0],
+                                        freeRecordSeconds: mockFreeSeconds)
+        emit(.statusReport(report))
+    }
+
+    /// 测试注入：状态轮询间隔
+    public func setStatusInterval(_ sec: TimeInterval) {
+        statusInterval = sec
+    }
+
+    private func startStatusLoop() {
+        statusTask?.cancel()
+        statusTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(max(0.1, await self?.statusInterval ?? 5) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await self?.refreshStatus()
+            }
+        }
     }
 
     // MARK: - LiveView

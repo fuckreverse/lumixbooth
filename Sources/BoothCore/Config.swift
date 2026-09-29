@@ -49,7 +49,26 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var reconnectBaseDelaySec: Double = 1   // 断线重连指数退避基数
         public var reconnectMaxDelaySec: Double = 15
         public var liveViewBufferSize = 1 << 20
+        /// 电量/存储轮询间隔（秒；连接后自动开启，0 = 关闭）
+        public var statusPollIntervalSec: Double = 30
         public init() {}
+
+        // 向后兼容解码：老配置缺新字段 → 默认值
+        private enum CodingKeys: String, CodingKey {
+            case dylibPath, captureTimeoutSec, captureRetry
+            case reconnectBaseDelaySec, reconnectMaxDelaySec, liveViewBufferSize
+            case statusPollIntervalSec
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            dylibPath = try c.decodeIfPresent(String.self, forKey: .dylibPath) ?? ""
+            captureTimeoutSec = try c.decodeIfPresent(Double.self, forKey: .captureTimeoutSec) ?? 10
+            captureRetry = try c.decodeIfPresent(Int.self, forKey: .captureRetry) ?? 1
+            reconnectBaseDelaySec = try c.decodeIfPresent(Double.self, forKey: .reconnectBaseDelaySec) ?? 1
+            reconnectMaxDelaySec = try c.decodeIfPresent(Double.self, forKey: .reconnectMaxDelaySec) ?? 15
+            liveViewBufferSize = try c.decodeIfPresent(Int.self, forKey: .liveViewBufferSize) ?? (1 << 20)
+            statusPollIntervalSec = try c.decodeIfPresent(Double.self, forKey: .statusPollIntervalSec) ?? 30
+        }
     }
 
     public struct CaptureConf: Codable, Sendable, Equatable {
