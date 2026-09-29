@@ -2,8 +2,11 @@ import Foundation
 
 // ============================================================
 // 配置（SPEC §9 设置页数据源）
-// JSON 落盘 BoothPaths.configFile；Codable + 全字段默认值，
-// 缺失字段自动回退默认（向后兼容老配置文件）。
+// JSON 落盘 BoothPaths.configFile；Codable + 全字段默认值。
+// 向后兼容三层防线（防呆）：
+//   ① 读取时先与「默认配置 JSON」深合并 → 老文件缺新字段自动补默认
+//   ② 整体解码失败时逐段解码 → 单段损坏不影响其他段
+//   ③ sanitized() 值域夹取 → 手改坏值不带病运行
 // ============================================================
 
 public struct BoothConfig: Codable, Sendable, Equatable {
@@ -13,6 +16,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
     public var imaging = ImagingConf()
     public var printing = PrintConf()
     public var server = ServerConf()
+    public var security = SecurityConf()
 
     public init() {}
 
@@ -66,6 +70,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var paperHeightMM = 152.4
         public var borderless = true
         public var dedupeWindowSec = 5            // 同一成片防连点窗口
+        public var printQuotaPerHour = 0          // 每小时打印张数上限，0 = 不限制（防脚本刷打印）
         public init() {}
     }
 
@@ -76,6 +81,129 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var ipadMaxFPS = 10
         public init() {}
     }
+
+    /// 防呆保护（无人值守场景）：退出保护开关。
+    /// PIN 哈希存独立 guard.json（PINStore），一键重置配置不会把密码冲掉。
+    public struct SecurityConf: Codable, Sendable, Equatable {
+        public var quitProtection = true          // Cmd+Q / 关窗需 PIN 验证
+        public init() {}
+    }
+}
+
+// MARK: - 值域净化（防呆：手改 config.json / 文件损坏时不带病运行）
+
+extension BoothConfig {
+
+    /// 全字段夹取到安全区间，返回净化后的副本
+    public func sanitized() -> BoothConfig {
+        var c = self
+        // 相机
+        c.camera.captureTimeoutSec = c.camera.captureTimeoutSec.clamped(1...60)
+        c.camera.captureRetry = c.camera.captureRetry.clamped(0...5)
+        c.camera.reconnectBaseDelaySec = c.camera.reconnectBaseDelaySec.clamped(0.1...60)
+        c.camera.reconnectMaxDelaySec = c.camera.reconnectMaxDelaySec.clamped(0.1...120)
+        c.camera.liveViewBufferSize = c.camera.liveViewBufferSize.clamped(1 << 16...1 << 24)
+        // 拍摄（0 秒倒计时 = 立即拍，是合法操作员选择；只拦负数/爆炸值）
+        c.capture.countdownSec = c.capture.countdownSec.clamped(0...30)
+        c.capture.reviewTimeoutSec = c.capture.reviewTimeoutSec.clamped(1...600)
+        c.capture.gestureTimeoutSec = c.capture.gestureTimeoutSec.clamped(5...300)
+        c.capture.armedTimeoutSec = c.capture.armedTimeoutSec.clamped(3...120)
+        c.capture.defaultMode.shots = c.capture.defaultMode.shots.clamped(1...8)
+        // 视觉
+        c.vision.gestureHitFrames = c.vision.gestureHitFrames.clamped(1...30)
+        c.vision.readyFrames = c.vision.readyFrames.clamped(1...60)
+        c.vision.minFaceAreaRatio = c.vision.minFaceAreaRatio.clamped(0.0001...0.25)
+        c.vision.detectEveryNFrames = c.vision.detectEveryNFrames.clamped(1...30)
+        // 修图
+        c.imaging.skinStrength = c.imaging.skinStrength.clamped(0...100)
+        // 打印
+        c.printing.defaultCopies = c.printing.defaultCopies.clamped(1...4)
+        c.printing.minCopies = c.printing.minCopies.clamped(1...4)
+        c.printing.maxCopies = c.printing.maxCopies.clamped(1...8)
+        if c.printing.minCopies > c.printing.maxCopies { c.printing.minCopies = c.printing.maxCopies }
+        c.printing.paperWidthMM = c.printing.paperWidthMM.clamped(50...300)
+        c.printing.paperHeightMM = c.printing.paperHeightMM.clamped(50...300)
+        c.printing.dedupeWindowSec = c.printing.dedupeWindowSec.clamped(0...120)
+        c.printing.printQuotaPerHour = c.printing.printQuotaPerHour.clamped(0...1000)
+        // 服务
+        c.server.port = UInt16(min(max(Double(c.server.port), 0), 65_535))
+        c.server.ipadMaxFPS = c.server.ipadMaxFPS.clamped(1...30)
+        return c
+    }
+}
+
+private extension Comparable {
+    func clamped(_ range: ClosedRange<Self>) -> Self {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+// MARK: - 容错加载（缺字段补默认 / 坏段隔离）
+
+extension BoothConfig {
+
+    /// 从 JSON 数据加载配置：默认值深合并 → 整体解码 → 失败则逐段解码 → 净化
+    public static func load(from data: Data) -> BoothConfig {
+        let merged = mergeWithDefaults(data)
+        let dec = JSONDecoder()
+        if let full = try? dec.decode(BoothConfig.self, from: merged) {
+            return full.sanitized()
+        }
+        // 整体解码失败（某段字段类型损坏）→ 逐段解码，坏段用默认
+        var cfg = BoothConfig()
+        if let obj = try? JSONSerialization.jsonObject(with: merged) as? [String: Any] {
+            for section in ["camera", "capture", "vision", "imaging", "printing", "server", "security"] {
+                guard let sub = obj[section] else { continue }
+                guard let subData = try? JSONSerialization.data(withJSONObject: sub) else { continue }
+                switch section {
+                case "camera":   if let s = try? dec.decode(CameraConf.self, from: subData) { cfg.camera = s }
+                case "capture":  if let s = try? dec.decode(CaptureConf.self, from: subData) { cfg.capture = s }
+                case "vision":   if let s = try? dec.decode(VisionConf.self, from: subData) { cfg.vision = s }
+                case "imaging":  if let s = try? dec.decode(ImagingConf.self, from: subData) { cfg.imaging = s }
+                case "printing": if let s = try? dec.decode(PrintConf.self, from: subData) { cfg.printing = s }
+                case "server":   if let s = try? dec.decode(ServerConf.self, from: subData) { cfg.server = s }
+                case "security": if let s = try? dec.decode(SecurityConf.self, from: subData) { cfg.security = s }
+                default: break
+                }
+            }
+        }
+        Log.core.warn("配置文件部分损坏，已按段容错加载（坏段回退默认值）")
+        return cfg.sanitized()
+    }
+
+    /// 老配置 JSON 与默认配置深合并（老值优先、递归合并），
+    /// 使新增字段自动补默认值，不破坏已有字段
+    private static func mergeWithDefaults(_ data: Data) -> Data {
+        guard let defaultsData = try? JSONEncoder().encode(BoothConfig()),
+              var defaultsObj = (try? JSONSerialization.jsonObject(with: defaultsData)) as? [String: Any],
+              let fileObj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return data
+        }
+        deepMerge(into: &defaultsObj, from: fileObj)
+        return (try? JSONSerialization.data(withJSONObject: defaultsObj)) ?? data
+    }
+
+    /// 递归合并：from 的值覆盖 target，同名字典递归，其余类型直接覆盖
+    private static func deepMerge(into target: inout [String: Any], from: [String: Any]) {
+        for (key, value) in from {
+            if let sub = value as? [String: Any], let existing = target[key] as? [String: Any] {
+                var merged = existing
+                deepMerge(into: &merged, from: sub)
+                target[key] = merged
+            } else {
+                target[key] = value
+            }
+        }
+    }
+}
+
+// MARK: - 配置备份描述（操作员页「恢复备份」列表数据源）
+
+public struct ConfigBackup: Sendable, Identifiable, Equatable {
+    public let name: String          // 文件名 config-yyyyMMdd-HHmmss.json
+    public let date: Date
+    public let sizeBytes: Int
+    public var id: String { name }
 }
 
 /// 配置存取（actor 串行，改即存）
@@ -85,15 +213,22 @@ public actor ConfigStore {
     public private(set) var config: BoothConfig
     private var continuations: [UUID: AsyncStream<BoothConfig>.Continuation] = [:]
 
-    private init() {
+    private let fileURL: URL
+    private let backupsDir: URL
+    private let maxBackups = 10
+
+    public init(fileURL: URL = BoothPaths.configFile,
+                backupsDir: URL = BoothPaths.configBackupsDir) {
+        self.fileURL = fileURL
+        self.backupsDir = backupsDir
+        // 备份目录先建好（copyItem 目标目录缺失会静默失败）
+        try? FileManager.default.createDirectory(at: backupsDir, withIntermediateDirectories: true)
         var cfg = BoothConfig()
-        if let data = try? Data(contentsOf: BoothPaths.configFile) {
-            // 逐段解码，任一段损坏/缺字段不影响其他段
-            let dec = JSONDecoder()
-            if let obj = try? dec.decode(BoothConfig.self, from: data) { cfg = obj }
+        if let data = try? Data(contentsOf: fileURL) {
+            cfg = BoothConfig.load(from: data)
         }
         self.config = cfg
-        Log.core.info("配置已加载: \(BoothPaths.configFile.path)")
+        Log.core.info("配置已加载: \(fileURL.path)")
     }
 
     /// 配置变化流（UI/各模块订阅热更新）
@@ -112,17 +247,112 @@ public actor ConfigStore {
 
     public func update(_ mutate: @Sendable (inout BoothConfig) -> Void) {
         mutate(&config)
-        save()
+        config = config.sanitized()      // 写入侧同样净化，防 UI/代码写坏值
+        persist(backup: true)
         for c in continuations.values { c.yield(config) }
     }
 
-    private func save() {
+    // MARK: - 备份 / 恢复 / 重置 / 导入导出（防呆核心）
+
+    /// 写盘前自动备份当前配置（时间戳命名，保留最近 maxBackups 份）
+    private func persist(backup: Bool) {
+        if backup, FileManager.default.fileExists(atPath: fileURL.path) {
+            backupCurrentFile()
+        }
         do {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(config).write(to: BoothPaths.configFile, options: .atomic)
+            try enc.encode(config).write(to: fileURL, options: .atomic)
         } catch {
             Log.core.error("配置保存失败: \(error.localizedDescription)")
         }
+    }
+
+    private func backupCurrentFile() {
+        let fm = FileManager.default
+        let stamp = DateFormatter(format: "yyyyMMdd-HHmmss").string(from: Date())
+        let dest = backupsDir.appendingPathComponent("config-\(stamp).json")
+        do {
+            // 同秒内多次改动：覆盖同一份备份，避免爆量
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.copyItem(at: fileURL, to: dest)
+            pruneBackups()
+            Log.core.debug("配置已自动备份: \(dest.lastPathComponent)")
+        } catch {
+            Log.core.warn("配置备份失败（不阻断写入）: \(error.localizedDescription)")
+        }
+    }
+
+    /// 只保留最近 maxBackups 份（文件名时间序即时间序）
+    private func pruneBackups() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(atPath: backupsDir.path) else { return }
+        let configs = files.filter { $0.hasPrefix("config-") && $0.hasSuffix(".json") }.sorted()
+        guard configs.count > maxBackups else { return }
+        for name in configs.prefix(configs.count - maxBackups) {
+            try? fm.removeItem(at: backupsDir.appendingPathComponent(name))
+        }
+    }
+
+    /// 备份列表（新→旧）
+    public func listBackups() -> [ConfigBackup] {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(atPath: backupsDir.path) else { return [] }
+        var items: [ConfigBackup] = []
+        for name in files where name.hasPrefix("config-") && name.hasSuffix(".json") {
+            let url = backupsDir.appendingPathComponent(name)
+            let dateStr = String(name.dropFirst("config-".count).dropLast(".json".count))
+            let date = DateFormatter(format: "yyyyMMdd-HHmmss").date(from: dateStr)
+                ?? (try? fm.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
+                ?? Date.distantPast
+            let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+            items.append(ConfigBackup(name: name, date: date, sizeBytes: size))
+        }
+        return items.sorted { $0.date > $1.date }
+    }
+
+    /// 恢复指定备份（当前配置会先自动备份 → 恢复操作本身可撤销）
+    /// 返回 false = 备份不存在或内容损坏
+    @discardableResult
+    public func restoreBackup(named name: String) -> Bool {
+        // 防路径注入：只允许纯文件名
+        guard !name.contains("/"), !name.contains("..") else { return false }
+        let url = backupsDir.appendingPathComponent(name)
+        guard let data = try? Data(contentsOf: url) else { return false }
+        let restored = BoothConfig.load(from: data)
+        update { $0 = restored }
+        Log.core.info("已恢复配置备份: \(name)")
+        return true
+    }
+
+    /// 一键重置为默认配置（当前配置先自动备份 → 可反悔；不影响主题素材/历史照片/PIN）
+    public func resetToDefaults() {
+        update { $0 = BoothConfig() }
+        Log.core.notice("配置已一键重置为默认（原配置已自动备份，可从「恢复备份」撤销）")
+    }
+
+    /// 导出当前配置到指定文件（DIY：多场活动复用）
+    public func exportConfig(to url: URL) throws {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try enc.encode(config).write(to: url, options: .atomic)
+        Log.core.info("配置已导出: \(url.path)")
+    }
+
+    /// 从文件导入配置（导入前自动备份当前配置 → 可撤销）
+    public func importConfig(from url: URL) throws {
+        let data = try Data(contentsOf: url)
+        let imported = BoothConfig.load(from: data)   // 缺字段补默认 + 净化
+        update { $0 = imported }
+        Log.core.info("配置已导入: \(url.path)（原配置已自动备份）")
+    }
+}
+
+/// 一次性 DateFormatter（备份文件名/解析用）
+private extension DateFormatter {
+    convenience init(format: String) {
+        self.init()
+        self.dateFormat = format
+        self.locale = Locale(identifier: "en_US_POSIX")
     }
 }

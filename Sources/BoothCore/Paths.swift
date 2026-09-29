@@ -32,6 +32,16 @@ public enum BoothPaths {
 
     public static let configFile: URL = appSupport.appendingPathComponent("config.json")
 
+    /// 操作员 PIN 哈希（独立于 config.json：一键重置配置不会把密码冲掉）
+    public static let guardFile: URL = appSupport.appendingPathComponent("guard.json")
+
+    /// 配置自动备份目录（ConfigStore 每次写盘前备份，保留最近 10 份）
+    public static let configBackupsDir: URL = {
+        let dir = appSupport.appendingPathComponent("config-backups", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     /// 新建一次拍照会话目录：sessions/<yyyy-MM-dd>/<HHmmss-短id>/
     public static func newSessionDir(now: Date = Date()) -> URL {
         let day = DateFormatter.boothDay.string(from: now)

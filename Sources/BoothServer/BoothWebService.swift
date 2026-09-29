@@ -118,6 +118,8 @@ final class ClientSession {
     // WS 分片消息重组缓冲
     var fragments = Data()
     var fragmentOpcode: UInt8?
+    // 指令限速记账：滑动窗口内收到的文本指令时间戳（防脚本刷 print/retake）
+    var commandTimes: [Date] = []
 
     init(conn: NWConnection) { self.conn = conn }
 }
@@ -456,7 +458,7 @@ public actor BoothWebService: BoothWebServing {
 
         case WSOpcode.text:
             if frame.fin {
-                handleTextMessage(String(data: frame.payload, encoding: .utf8) ?? "")
+                handleTextMessage(conn, session, String(data: frame.payload, encoding: .utf8) ?? "")
             } else {
                 // 分片首帧：开始重组
                 session.fragments = frame.payload
@@ -479,7 +481,7 @@ public actor BoothWebService: BoothWebServing {
                 session.fragments.removeAll()
                 session.fragmentOpcode = nil
                 if op == WSOpcode.text {
-                    handleTextMessage(String(data: message, encoding: .utf8) ?? "")
+                    handleTextMessage(conn, session, String(data: message, encoding: .utf8) ?? "")
                 } else {
                     Log.server.warn("分片 binary 消息重组完成，忽略")
                 }
@@ -490,8 +492,19 @@ public actor BoothWebService: BoothWebServing {
         }
     }
 
-    /// 处理一条完整文本消息（JSON 指令）；非法 JSON 记 warn 不崩
-    private func handleTextMessage(_ text: String) {
+    /// 处理一条完整文本消息（JSON 指令）；非法 JSON 记 warn 不崩。
+    /// 指令限速：5 秒窗口内超过 12 条 → 判定为脚本刷指令，断开连接
+    private func handleTextMessage(_ conn: NWConnection, _ session: ClientSession, _ text: String) {
+        let key = ObjectIdentifier(conn)
+        guard sessions[key] != nil else { return }
+        let now = Date()
+        session.commandTimes.removeAll { now.timeIntervalSince($0) > 5 }
+        session.commandTimes.append(now)
+        if session.commandTimes.count > 12 {
+            Log.server.warn("WS 指令限速触发（5 秒内 \(session.commandTimes.count) 条），断开连接")
+            sendClose(conn, code: 1008, reason: "指令过于频繁")
+            return
+        }
         Log.server.info("WS 收到消息: \(text.prefix(200))")
         guard let data = text.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {

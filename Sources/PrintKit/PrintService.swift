@@ -22,6 +22,9 @@ public actor PrintService: PrintServing {
     /// 任务列表（数组序即队列序；done/failed 保留在列表里等操作员清除）
     private var jobsStore: [PrintJob] = []
 
+    /// 打印配额记账：最近一小时内已入队的份数 [(时间, 份数)]（printQuotaPerHour > 0 时启用）
+    private var quotaLog: [(at: Date, copies: Int)] = []
+
     /// 消费循环存活标志（保证全局只有一个消费者 → 串行）
     private var consumerRunning = false
 
@@ -86,15 +89,38 @@ public actor PrintService: PrintServing {
             Log.print.warn("份数夹取: 请求 \(copies) → \(clamped)（允许范围 \(config.minCopies)...\(config.maxCopies)）")
         }
 
+        // 打印配额（防脚本/连点刷打印：每小时上限，0 = 不限制）
+        if let rejected = quotaReject(copies: clamped) {
+            let job = PrintJob(imagePath: path, copies: clamped, status: .failed,
+                               lastError: rejected)
+            jobsStore.append(job)
+            publishQueue()
+            return job
+        }
+
         let job = PrintJob(imagePath: path, copies: clamped, status: .queued)
         jobsStore.append(job)
+        // 恒记账（含未启用配额期间的任务）：中途开启配额时历史用量不漏算
+        quotaLog.append((Date(), clamped))
+        if quotaLog.count > 4096 { quotaLog.removeAll { $0.at < Date().addingTimeInterval(-3600) } }
         Log.print.info("任务入队: id=\(job.id) copies=\(job.copies) 路径=\(path) 队列深度=\(jobsStore.count)")
         publishQueue()
         kickConsumer()
         return job
     }
 
-    /// 重试：仅 failed 可重试，重置为 queued 并排到队尾
+    /// 配额检查：超限返回拒绝原因，未超限返回 nil（未启用配额恒 nil）
+    private func quotaReject(copies: Int) -> String? {
+        guard config.printQuotaPerHour > 0 else { return nil }
+        let cutoff = Date().addingTimeInterval(-3600)
+        quotaLog.removeAll { $0.at < cutoff }
+        let used = quotaLog.reduce(0) { $0 + $1.copies }
+        guard used + copies > config.printQuotaPerHour else { return nil }
+        Log.print.error("打印配额已满: 本小时已入队 \(used) 份，上限 \(config.printQuotaPerHour)，拒绝本次 \(copies) 份")
+        return "打印配额已满（本小时上限 \(config.printQuotaPerHour) 张），请稍后再试或联系操作员" 
+    }
+
+    /// 重试：仅 failed 可重试，重置为 queued 并排到队尾；配额超限时拒绝重试
     public func retry(jobID: UUID) async {
         guard let index = jobsStore.firstIndex(where: { $0.id == jobID }) else {
             Log.print.warn("重试失败: 找不到任务 id=\(jobID)")
@@ -102,6 +128,12 @@ public actor PrintService: PrintServing {
         }
         guard jobsStore[index].status == .failed else {
             Log.print.warn("重试失败: 任务 id=\(jobID) 状态为 \(jobsStore[index].status)，仅 failed 可重试")
+            return
+        }
+        if let rejected = quotaReject(copies: jobsStore[index].copies) {
+            jobsStore[index].lastError = rejected
+            publishQueue()
+            Log.print.warn("重试被配额拒绝: id=\(jobID)")
             return
         }
         jobsStore[index].status = .queued

@@ -23,7 +23,7 @@ struct OperatorScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部条：标题 + 返回大屏
+            // 顶部条：标题 + 返回大屏（每次返回都会重新上锁）
             HStack {
                 Text("操作员后台 🛠️")
                     .font(theme.titleFont(30))
@@ -42,7 +42,7 @@ struct OperatorScreen: View {
             TabView {
                 OpStatusTab(vm: statusVM, serverRunning: composition.serverRunning, iPadURL: composition.iPadURL)
                     .tabItem { Label("状态", systemImage: "heart.text.square") }
-                OpSettingsTab(vm: settingsVM)
+                OpSettingsTab(vm: settingsVM, gate: composition.gate)
                     .tabItem { Label("设置", systemImage: "gearshape") }
                 OpHistoryTab(vm: historyVM)
                     .tabItem { Label("历史", systemImage: "photo.on.rectangle") }

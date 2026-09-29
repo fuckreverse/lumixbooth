@@ -41,6 +41,10 @@ final class AppComposition: ObservableObject {
     @Published var serverRunning = false
     /// iPad 访问地址（服务启动后算出，供二维码）
     @Published var iPadURL: String?
+    /// 操作员门禁（PIN 验证 / 防爆破退避 / 退出保护拦截）
+    let gate = OperatorGate()
+    /// 退出保护开关镜像（config 热更新；AppDelegate 同步读）
+    @Published var quitProtection = true
 
     private var configWatchTask: Task<Void, Never>?
     private var started = false
@@ -73,6 +77,7 @@ final class AppComposition: ObservableObject {
         //    这里直接解码同一 config.json，数据一致；BoothWebService 构造时需要端口）
         let conf = Self.loadConfigSnapshot()
         server = BoothWebService(conf: conf)
+        quitProtection = conf.security.quitProtection
         Log.ui.info("模块[5/6] 服务 = BoothWebService（端口 \(conf.server.port)）")
         // ⑥ 状态机：注入全部协议服务
         coordinator = SessionCoordinator(
@@ -84,9 +89,8 @@ final class AppComposition: ObservableObject {
 
     /// 同步读配置快照（仅组装期用；运行期一律走 ConfigStore）
     private static func loadConfigSnapshot() -> BoothConfig {
-        if let data = try? Data(contentsOf: BoothPaths.configFile),
-           let cfg = try? JSONDecoder().decode(BoothConfig.self, from: data) {
-            return cfg
+        if let data = try? Data(contentsOf: BoothPaths.configFile) {
+            return BoothConfig.load(from: data)   // 缺字段补默认 + 净化
         }
         return BoothConfig()
     }
@@ -104,6 +108,9 @@ final class AppComposition: ObservableObject {
         // 状态机后台运行（内部自动尝试相机 connect + startLiveView，失败靠 CameraKit 重连）
         await coordinator.begin()
         Log.ui.info("状态机已后台运行（相机连接交给 CameraKit 自重连）")
+
+        // 门禁快照加载（是否有 PIN / 是否放弃保护）
+        await gate.refreshState()
 
         // Web 服务：失败记日志不崩 app
         if cfg.server.enabled {
@@ -140,6 +147,7 @@ final class AppComposition: ObservableObject {
             for await cfg in await ConfigStore.shared.stream() {
                 guard let self else { return }
                 if first { first = false; continue } // 首帧是当前值，跳过
+                self.quitProtection = cfg.security.quitProtection
                 await self.printer.applyConfig(cfg.printing)
                 if cfg.server.enabled, !self.serverRunning {
                     Log.ui.info("配置变更：Web 服务打开，正在启动…")
@@ -167,9 +175,26 @@ final class AppComposition: ObservableObject {
 
 /// App 生命周期代理：退出前停服务/断相机（terminateLater 等清理完再退）
 final class BoothAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // 退出保护：门禁锁定时关窗不退出（防宾客关掉 App）。
+        // 回调固定在主线程，assumeIsolated 安全
+        if let c = CompositionHolder.composition,
+           MainActor.assumeIsolated({ quitBlocked(c) }) {
+            return false
+        }
+        return true
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // 退出保护：门禁锁定时拦截退出，弹锁屏验证（Esc 取消 / 验证通过放行）
+        if let c = CompositionHolder.composition,
+           MainActor.assumeIsolated({ quitBlocked(c) }) {
+            MainActor.assumeIsolated {
+                c.gate.requestQuit()
+                c.showingOperator = true
+            }
+            return .terminateCancel
+        }
         Task { @MainActor in
             guard let composition = CompositionHolder.composition else {
                 NSApp.reply(toApplicationShouldTerminate: true)
@@ -180,6 +205,12 @@ final class BoothAppDelegate: NSObject, NSApplicationDelegate {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// 退出是否被拦：开关打开且门禁生效中（未设 PIN / 放弃保护时无从验证 → 不拦）
+    @MainActor
+    private func quitBlocked(_ c: AppComposition) -> Bool {
+        c.quitProtection && c.gate.quitGuardActive && c.gate.isLocked
     }
 }
 
@@ -214,10 +245,12 @@ struct BoothAppMain: App {
 struct RootView: View {
     @Environment(\.boothTheme) private var theme
     @ObservedObject var composition: AppComposition
+    @ObservedObject private var gate: OperatorGate
     @StateObject private var guestVM: GuestViewModel
 
     init(composition: AppComposition) {
         _composition = ObservedObject(wrappedValue: composition)
+        _gate = ObservedObject(wrappedValue: composition.gate)
         _guestVM = StateObject(wrappedValue: GuestViewModel(
             coordinator: composition.coordinator, camera: composition.camera))
     }
@@ -225,8 +258,14 @@ struct RootView: View {
     var body: some View {
         ZStack {
             if composition.showingOperator {
-                OperatorScreen(composition: composition)
-                    .transition(.opacity)
+                if gate.isLocked {
+                    // 门禁锁屏：验证前不暴露任何操作员界面
+                    OperatorLockView(gate: gate)
+                        .transition(.opacity)
+                } else {
+                    OperatorScreen(composition: composition)
+                        .transition(.opacity)
+                }
             } else {
                 GuestScreen(composition: composition, vm: guestVM)
                     .transition(.opacity)
@@ -237,12 +276,30 @@ struct RootView: View {
         .background(theme.backgroundColor.ignoresSafeArea())
         .focusable()
         .focusEffectDisabled()
-        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，Esc=操作员页往返
-        .onKeyPress(.space) { guestVM.triggerStart(); return .handled }
-        .onKeyPress(KeyEquivalent("r")) { guestVM.retake(); return .handled }
-        .onKeyPress(KeyEquivalent("R")) { guestVM.retake(); return .handled }
+        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，Esc=操作员页往返。
+        // 操作员页打开时空间/R 不触发拍摄（防宾客按 Esc 后空格还能隔着锁屏拍照）
+        .onKeyPress(.space) {
+            guard !composition.showingOperator else { return .handled }
+            guestVM.triggerStart(); return .handled
+        }
+        .onKeyPress(KeyEquivalent("r")) {
+            guard !composition.showingOperator else { return .handled }
+            guestVM.retake(); return .handled
+        }
+        .onKeyPress(KeyEquivalent("R")) {
+            guard !composition.showingOperator else { return .handled }
+            guestVM.retake(); return .handled
+        }
         .onKeyPress(.escape) { toggleOperatorPage(); return .handled }
         .task { guestVM.start() }
+        // 进入操作员页：门禁拦截（放弃保护者自动放行）；返回宾客大屏：重新上锁
+        .onChange(of: composition.showingOperator) { _, showing in
+            if showing {
+                Task { await gate.entryRequested() }
+            } else {
+                gate.lock()
+            }
+        }
     }
 
     /// Esc：进操作员页（同时退出全屏）；在操作员页按 Esc 返回宾客大屏

@@ -51,10 +51,12 @@ final class OpStatusViewModel: ObservableObject {
 
 // MARK: - 设置页
 
-/// 读写 ConfigStore（改动即存即生效）
+/// 读写 ConfigStore（改动即存即生效）+ 配置备份管理（防呆：坏改动可反悔）
 @MainActor
 final class OpSettingsViewModel: ObservableObject {
     @Published private(set) var config = BoothConfig()
+    /// 配置备份列表（新→旧；每次改动自动备份，保留 10 份）
+    @Published private(set) var backups: [ConfigBackup] = []
     private var task: Task<Void, Never>?
     private var started = false
 
@@ -67,11 +69,51 @@ final class OpSettingsViewModel: ObservableObject {
                 self.config = cfg
             }
         }
+        reloadBackups()
     }
 
     /// 统一写入口（ConfigStore 改即存盘 + 广播热更新）
     func update(_ mutate: @escaping @Sendable (inout BoothConfig) -> Void) {
         Task { await ConfigStore.shared.update(mutate) }
+    }
+
+    // MARK: - 防呆：备份 / 重置 / 导入导出
+
+    func reloadBackups() {
+        Task { [weak self] in
+            guard let self else { return }
+            self.backups = await ConfigStore.shared.listBackups()
+        }
+    }
+
+    /// 一键重置（长按 3 秒触发）：重置前 ConfigStore 自动备份当前配置
+    func resetToDefaults() {
+        Task {
+            await ConfigStore.shared.resetToDefaults()
+            reloadBackups()
+        }
+    }
+
+    func restoreBackup(_ name: String) {
+        Task {
+            await ConfigStore.shared.restoreBackup(named: name)
+            reloadBackups()
+        }
+    }
+
+    func exportConfig(to url: URL) {
+        Task {
+            do { try await ConfigStore.shared.exportConfig(to: url) }
+            catch { Log.ui.error("配置导出失败: \(error.localizedDescription)") }
+        }
+    }
+
+    func importConfig(from url: URL) {
+        Task {
+            do { try await ConfigStore.shared.importConfig(from: url) }
+            catch { Log.ui.error("配置导入失败: \(error.localizedDescription)") }
+            reloadBackups()
+        }
     }
 }
 
