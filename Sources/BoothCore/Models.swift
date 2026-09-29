@@ -1,0 +1,145 @@
+import Foundation
+
+// MARK: - 相机
+
+/// 枚举到的 USB 相机
+public struct CameraDeviceInfo: Sendable, Equatable, Codable {
+    public var devId: UInt32
+    public var uuid: String
+    public var model: String
+    public var serial: String
+    public init(devId: UInt32, uuid: String, model: String, serial: String) {
+        self.devId = devId; self.uuid = uuid; self.model = model; self.serial = serial
+    }
+}
+
+/// 相机连接状态（UI 顶部状态条 / 操作员页展示）
+public enum CameraConnectionState: String, Sendable, Equatable, Codable {
+    case disconnected   // 未连接（含搜索不到）
+    case searching      // 正在枚举设备
+    case connecting     // SelectPnPDevice / OpenSession 中
+    case connected      // 会话已开，未开 LiveView
+    case liveView       // LiveView 取流中（可拍照）
+    case reconnecting   // 断线重连中
+}
+
+/// 相机层事件（相机专属流，SessionEngine/UI 订阅）
+public enum CameraEvent: Sendable, Equatable {
+    case connected(CameraDeviceInfo)
+    case disconnected(reason: String)
+    case objectAdded(handle: UInt32)
+    case transferProgress(percent: UInt32)
+    case failure(String)
+}
+
+/// 一次快门的结果（JPEG 已在内存）
+public struct CameraCapture: Sendable {
+    public var handle: UInt32
+    public var data: Data
+    public var fileName: String   // 相机侧文件名，如 P1000123.JPG
+    public init(handle: UInt32, data: Data, fileName: String) {
+        self.handle = handle; self.data = data; self.fileName = fileName
+    }
+}
+
+// MARK: - 拍摄模式与流程状态
+
+public enum ShootKind: String, Sendable, Codable, Equatable {
+    case single   // 单张直出 6 寸
+    case collage  // 连拍 N 张拼 6 寸大头贴条
+}
+
+public struct ShootMode: Sendable, Codable, Equatable {
+    public var kind: ShootKind
+    public var shots: Int          // collage 用，single 恒为 1
+    public static let single = ShootMode(kind: .single, shots: 1)
+    public static func collage(_ shots: Int = 4) -> ShootMode { ShootMode(kind: .collage, shots: shots) }
+    public init(kind: ShootKind, shots: Int) { self.kind = kind; self.shots = shots }
+}
+
+/// 修图产物
+public struct ProcessedPhoto: Sendable, Equatable {
+    public var id: UUID
+    public var printFile: URL      // 1200×1800 @300dpi 打印位图
+    public var displayFile: URL    // 长边 1600 展示位图（大屏/iPad/QR 下载）
+    public var originals: [URL]    // 落盘原图
+    public init(id: UUID, printFile: URL, displayFile: URL, originals: [URL]) {
+        self.id = id; self.printFile = printFile; self.displayFile = displayFile; self.originals = originals
+    }
+}
+
+/// 拍照流程状态机（SPEC §3），Equatable 便于单测断言
+public enum BoothState: Sendable, Equatable {
+    case idle                              // 待机吸引页
+    case armed                             // 检测到人，姿势引导中
+    case gestureWait                       // 等待手势触发
+    case countdown(secondsLeft: Int)       // 倒计时
+    case capturing(shot: Int, of: Int)     // 快门+下载中
+    case processing                        // 修图合成中
+    case review(ProcessedPhoto)            // iPad/大屏确认
+    case printing(copies: Int)             // 打印中
+    case failure(String)                   // 可恢复错误（自动回 idle）
+}
+
+// MARK: - 手势与姿势
+
+public enum DetectedGesture: String, Sendable, Equatable, Codable {
+    case peace      // ✌️
+    case openPalm   // 张开手掌（挥手的静态判定基础）
+}
+
+public struct PoseReadiness: Sendable, Equatable {
+    public var humanPresent: Bool
+    public var facePresent: Bool
+    public var faceAreaRatio: Double   // 人脸面积 / 画面面积
+    public var isReady: Bool           // VisionKit 按阈值综合判定
+    public static let empty = PoseReadiness(humanPresent: false, facePresent: false, faceAreaRatio: 0, isReady: false)
+    public init(humanPresent: Bool, facePresent: Bool, faceAreaRatio: Double, isReady: Bool) {
+        self.humanPresent = humanPresent; self.facePresent = facePresent
+        self.faceAreaRatio = faceAreaRatio; self.isReady = isReady
+    }
+}
+
+// MARK: - 打印
+
+public enum PrintJobStatus: String, Sendable, Codable, Equatable {
+    case queued, printing, done, failed, cancelled
+}
+
+public struct PrintJob: Sendable, Codable, Equatable, Identifiable {
+    public var id: UUID
+    public var imagePath: String     // 打印位图绝对路径
+    public var copies: Int
+    public var status: PrintJobStatus
+    public var createdAt: Date
+    public var finishedAt: Date?
+    public var lastError: String?
+    public init(id: UUID = UUID(), imagePath: String, copies: Int,
+                status: PrintJobStatus = .queued, createdAt: Date = Date(),
+                finishedAt: Date? = nil, lastError: String? = nil) {
+        self.id = id; self.imagePath = imagePath; self.copies = copies; self.status = status
+        self.createdAt = createdAt; self.finishedAt = finishedAt; self.lastError = lastError
+    }
+}
+
+// MARK: - 全局事件总线事件
+
+public enum AppEvent: Sendable, Equatable {
+    case stateChanged(BoothState)
+    case cameraConnectionChanged(CameraConnectionState)
+    case printQueueChanged([PrintJob])
+    case countdownTick(Int)
+}
+
+// MARK: - 通用错误
+
+public enum BoothError: Error, Sendable, Equatable {
+    case cameraNotFound
+    case cameraConnectFailed(String)
+    case captureTimeout
+    case captureFailed(String)
+    case liveViewFailed(String)
+    case imagingFailed(String)
+    case printerUnavailable(String)
+    case serverFailed(String)
+}
