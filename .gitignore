@@ -6,3 +6,10 @@
 # 逆向分析产物与冗余 dylib 副本已移出仓库（../booth-analysis/），防再次误提交
 analysis/
 lib/
+
+# 调试/逆向临时产物
+*.log
+\!docs/**/*.log
+lmx.py
+thread_test.py
+lv_frame.jpg
