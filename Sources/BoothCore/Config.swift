@@ -93,6 +93,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var skinSmoothing = true           // 美肤
         public var skinStrength = 50              // 0-100
         public var replaceBackground = false      // 换背景（需主题带 background.png）
+        public var decorationTemplate = ""        // 搞怪装饰模板名（decorations/<name>/template.json），空 = 关闭
         public var frame = true                   // 边框/水印
         public var themeName = "default"
         public var dateWatermark = true
@@ -104,6 +105,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         // 向后兼容解码：老配置缺新字段 → 默认值
         private enum CodingKeys: String, CodingKey {
             case autoColor, skinSmoothing, skinStrength, replaceBackground
+            case decorationTemplate
             case frame, themeName, dateWatermark, filterSelection, defaultFilter
         }
         public init(from decoder: Decoder) throws {
@@ -112,6 +114,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             skinSmoothing = try c.decodeIfPresent(Bool.self, forKey: .skinSmoothing) ?? true
             skinStrength = try c.decodeIfPresent(Int.self, forKey: .skinStrength) ?? 50
             replaceBackground = try c.decodeIfPresent(Bool.self, forKey: .replaceBackground) ?? false
+            decorationTemplate = try c.decodeIfPresent(String.self, forKey: .decorationTemplate) ?? ""
             frame = try c.decodeIfPresent(Bool.self, forKey: .frame) ?? true
             themeName = try c.decodeIfPresent(String.self, forKey: .themeName) ?? "default"
             dateWatermark = try c.decodeIfPresent(Bool.self, forKey: .dateWatermark) ?? true

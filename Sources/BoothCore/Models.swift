@@ -215,6 +215,63 @@ public struct PrintJob: Sendable, Codable, Equatable, Identifiable {
     }
 }
 
+// MARK: - 人脸关键点几何（搞怪装饰用）
+
+/// 单张人脸的关键点几何。
+/// 坐标系约定：**原图像素坐标，原点左下、y 向上**（与 Vision 归一化坐标、
+/// CIImage extent、CGContext 一致，装饰算子之间无需任何翻转换算）。
+public struct FaceGeometry: Sendable, Equatable {
+
+    /// 关键点区域（区域缺失表示未检出，算子自行降级）
+    public enum Region: String, Sendable, CaseIterable, Codable, Equatable {
+        case faceContour, leftEye, rightEye, leftEyebrow, rightEyebrow
+        case nose, outerLips, innerLips
+    }
+
+    /// 人脸框（像素，原点左下）
+    public var rect: CGRect
+    /// 头部侧倾角（弧度，逆时针为正；贴纸跟随旋转用）
+    public var rollAngle: Double
+    /// 各区域关键点（像素坐标）；未检出的区域缺省
+    public var points: [Region: [CGPoint]]
+
+    public init(rect: CGRect, rollAngle: Double = 0, points: [Region: [CGPoint]] = [:]) {
+        self.rect = rect
+        self.rollAngle = rollAngle
+        self.points = points
+    }
+
+    /// 脸部中心
+    public var faceCenter: CGPoint { CGPoint(x: rect.midX, y: rect.midY) }
+
+    /// 左眼中心（左眼区域质心）
+    public var leftEyeCenter: CGPoint? { Self.centroid(of: points[.leftEye]) }
+
+    /// 右眼中心
+    public var rightEyeCenter: CGPoint? { Self.centroid(of: points[.rightEye]) }
+
+    /// 双眼中点
+    public var eyeMidpoint: CGPoint? {
+        guard let l = leftEyeCenter, let r = rightEyeCenter else { return nil }
+        return CGPoint(x: (l.x + r.x) / 2, y: (l.y + r.y) / 2)
+    }
+
+    /// 两眼间距（贴纸缩放/形变半径的基准长度）
+    public var eyeDistance: CGFloat? {
+        guard let l = leftEyeCenter, let r = rightEyeCenter else { return nil }
+        return hypot(r.x - l.x, r.y - l.y)
+    }
+
+    /// 嘴部中心（外唇区域质心）
+    public var mouthCenter: CGPoint? { Self.centroid(of: points[.outerLips]) }
+
+    private static func centroid(of points: [CGPoint]?) -> CGPoint? {
+        guard let pts = points, !pts.isEmpty else { return nil }
+        let sum = pts.reduce(into: CGPoint.zero) { $0.x += $1.x; $0.y += $1.y }
+        return CGPoint(x: sum.x / CGFloat(pts.count), y: sum.y / CGFloat(pts.count))
+    }
+}
+
 // MARK: - 全局事件总线事件
 
 public enum AppEvent: Sendable, Equatable {

@@ -1,0 +1,8 @@
+{
+  "warps": [{"kind": "bigHead", "strength": 0.3}],
+  "stickers": [
+    {"file": "banner.png", "anchor": "faceTop", "scale": 1.9, "offsetY": 1.8},
+    {"file": "rings.png", "anchor": "mouth", "scale": 0.9, "offsetX": 1.6, "offsetY": -0.9}
+  ],
+  "caption": {"text": "❤ 甜甜蜜蜜 ❤", "colorHex": "#FFFFFF", "size": 64}
+}

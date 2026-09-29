@@ -30,6 +30,7 @@ final class AppComposition: ObservableObject {
     let gesture: GestureDetector
     let readiness: PoseReadinessDetector
     let segmenter: PersonSegmenter
+    let landmarker: FaceLandmarkDetector
     let imaging: ImagingService
     let printer: PrintService
     let server: BoothWebService
@@ -62,14 +63,15 @@ final class AppComposition: ObservableObject {
             camera = LumixCameraService()
             Log.ui.info("模块[1/6] 相机 = LumixCameraService（libLmxptpif）")
         }
-        // ② 视觉三件套（手势 / 姿势就绪 / 人像分割）
+        // ② 视觉四件套（手势 / 姿势就绪 / 人像分割 / 人脸关键点）
         gesture = GestureDetector()
         readiness = PoseReadinessDetector()
         segmenter = PersonSegmenter()
-        Log.ui.info("模块[2/6] 视觉 = GestureDetector + PoseReadinessDetector + PersonSegmenter")
-        // ③ 修图管线（注入人像分割，换背景能力）
-        imaging = ImagingService(segmenter: segmenter)
-        Log.ui.info("模块[3/6] 修图 = ImagingService(segmenter:)")
+        landmarker = FaceLandmarkDetector()
+        Log.ui.info("模块[2/6] 视觉 = GestureDetector + PoseReadinessDetector + PersonSegmenter + FaceLandmarkDetector")
+        // ③ 修图管线（注入人像分割 + 人脸关键点：换背景 / 搞怪装饰能力）
+        imaging = ImagingService(segmenter: segmenter, landmarker: landmarker)
+        Log.ui.info("模块[3/6] 修图 = ImagingService(segmenter:landmarker:)")
         // ④ 打印队列（CUPS 后端）
         printer = PrintService()
         Log.ui.info("模块[4/6] 打印 = PrintService")

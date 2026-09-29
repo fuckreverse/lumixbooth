@@ -23,6 +23,13 @@ public enum BoothPaths {
         return dir
     }()
 
+    /// 搞怪装饰模板目录：decorations/<模板名>/template.json + 贴纸 PNG
+    public static let decorationsDir: URL = {
+        let dir = appSupport.appendingPathComponent("decorations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     public static let logsDir: URL = {
         let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("Logs/Booth", isDirectory: true)

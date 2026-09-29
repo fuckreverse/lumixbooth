@@ -1,0 +1,9 @@
+{
+  "warps": [{"kind": "bigHead", "strength": 0.45}],
+  "stickers": [
+    {"file": "tophat.png", "anchor": "faceTop", "scale": 1.7, "offsetY": 0.75},
+    {"file": "mustache.png", "anchor": "mouth", "scale": 1.0, "offsetY": 0.22},
+    {"file": "bowtie.png", "anchor": "mouth", "scale": 1.2, "offsetY": 0.85}
+  ],
+  "caption": {"text": "余生请多指教！", "colorHex": "#FFFFFF", "size": 64}
+}
