@@ -10,7 +10,8 @@ import BoothCore
 //     Log.session 日志 / 内部状态流 / EventBus / BoothServer 广播。
 //  2. 唯一消费 camera.liveViewFrames（防止多消费者抢流），职责三分发：
 //     UI 重广播（bufferingNewest(2)）/ iPad MJPEG 推流（配置开关）/ 抽帧检测。
-//  3. 姿势与手势的连续帧防抖判定（BoothCore 契约规定防抖由本模块负责）。
+//  3. 姿势与手势的时长防抖判定（BoothCore 契约规定防抖由本模块负责；
+//     连续稳定 X ms 才算命中，对 LiveView 帧率波动免疫）。
 //  4. 倒计时、连拍编排（collage 循环 shots 次）、修图、REVIEW 决策、打印。
 //  5. 相机断线 / 拍照失败 / 修图失败的降级恢复（failure 态展示后回 idle）。
 //
@@ -80,13 +81,13 @@ public actor SessionCoordinator {
     private var timeoutTask: Task<Void, Never>?    // armed / gestureWait / review 超时
     private var dwellTask: Task<Void, Never>?      // failure / printing 停留计时
 
-    // MARK: - 防抖计数
+    // MARK: - 防抖状态（时长语义：连续稳定 X ms 才命中）
 
     private var frameIndex = 0        // 帧序号（detectEveryNFrames 抽帧用）
     private var autoArmSuppressedUntil: Date?   // 打印后自动触发冷却截止时刻（手动触发不受影响）
-    private var readyStreak = 0       // armed 态连续就绪帧
-    private var absentStreak = 0      // armed 态连续无人帧
-    private var gestureStreak = 0     // gestureWait 态连续手势命中帧
+    private var readySince: Date?     // armed 态就绪起算时刻（中断清 nil）
+    private var absentSince: Date?    // 无人起算时刻（armed / gestureWait 共用）
+    private var gestureSince: (kind: DetectedGesture, at: Date)?  // gestureWait 同一手势起算时刻（换手势重置）
 
     // MARK: - 重广播流（UI 订阅）
 
@@ -316,6 +317,9 @@ public actor SessionCoordinator {
             // IDLE 也要跑就绪检测——SPEC：ARMED 进入条件是"检测到人进入取景区域"
             guard cfg.vision.poseReadinessEnabled else { return }
             let r = await readiness.detectReadiness(in: frame)
+            // await 挂起期间外部可插入 start()/cancel() 改变状态（actor 重入），
+            // 检测结果只对"仍是 idle"的那次判定负责，防止把已开拍的流程打回 armed
+            guard case .idle = state else { return }
             if r.humanPresent {
                 Log.session.debug("IDLE 检测到人（人脸占比 \(String(format: "%.3f", r.faceAreaRatio))）")
                 await transition(.armed, reason: "检测到人进入取景区域")
@@ -325,46 +329,74 @@ public actor SessionCoordinator {
         case .armed:
             guard cfg.vision.poseReadinessEnabled else { return }
             let r = await readiness.detectReadiness(in: frame)
+            guard case .armed = state else { return }   // 同上：复验防重入
             if r.isReady {
-                readyStreak += 1
-                absentStreak = 0
-                Log.session.debug("姿势就绪命中 \(readyStreak)/\(cfg.vision.readyFrames) 帧")
-                if readyStreak >= cfg.vision.readyFrames {
-                    readyStreak = 0
+                absentSince = nil
+                let since = readySince ?? Date()
+                readySince = since
+                let heldMs = Date().timeIntervalSince(since) * 1000
+                if heldMs >= Double(cfg.vision.readyStableMs) {
+                    readySince = nil
+                    absentSince = nil
                     timeoutTask?.cancel(); timeoutTask = nil
                     if cfg.capture.triggerStyle == .countdown {
                         // 倒计时拍照模式：姿势就绪直接开拍（免手势）
                         await beginShootFlow(reason: "姿势就绪（倒计时拍照模式）")
                     } else {
-                        await transition(.gestureWait, reason: "姿势就绪（连续 \(cfg.vision.readyFrames) 帧）")
+                        await transition(.gestureWait, reason: "姿势就绪（稳定 \(cfg.vision.readyStableMs) ms）")
                         startGestureTimeout(cfg)
                     }
+                } else {
+                    Log.session.debug("姿势就绪持续 \(Int(heldMs))/\(cfg.vision.readyStableMs) ms")
                 }
             } else {
-                readyStreak = 0
+                readySince = nil   // 就绪中断，重新计时
                 if r.humanPresent {
-                    absentStreak = 0
+                    absentSince = nil
                 } else {
-                    absentStreak += 1
-                    Log.session.debug("人离开画面 \(absentStreak)/\(cfg.vision.readyFrames) 帧")
-                    // 人消失连续若干帧（复用 readyFrames 作阈值）→ 回 idle
-                    if absentStreak >= cfg.vision.readyFrames {
-                        await resetToIdle("人离开画面（连续 \(absentStreak) 帧）")
+                    let since = absentSince ?? Date()
+                    absentSince = since
+                    let heldMs = Date().timeIntervalSince(since) * 1000
+                    if heldMs >= Double(cfg.vision.absentStableMs) {
+                        await resetToIdle("人离开画面（持续 \(cfg.vision.absentStableMs) ms）")
+                    } else {
+                        Log.session.debug("人离开画面 \(Int(heldMs))/\(cfg.vision.absentStableMs) ms")
                     }
                 }
             }
 
         case .gestureWait:
             guard cfg.vision.gestureEnabled else { return }
-            if let g = await gesture.detectGesture(in: frame) {
-                gestureStreak += 1
-                Log.session.debug("手势命中 \(g.rawValue) \(gestureStreak)/\(cfg.vision.gestureHitFrames) 帧")
-                if gestureStreak >= cfg.vision.gestureHitFrames {
-                    await beginShootFlow(reason: "手势命中（\(g.rawValue) 连续 \(gestureStreak) 帧）")
+            let g = await gesture.detectGesture(in: frame)
+            guard case .gestureWait = state else { return }   // 复验防重入
+            if let g {
+                absentSince = nil
+                // 同一手势才能累计稳定时长：换手势/手抖切换视为重新起算
+                let since = (gestureSince?.kind == g) ? gestureSince!.at : Date()
+                gestureSince = (g, since)
+                let heldMs = Date().timeIntervalSince(since) * 1000
+                if heldMs >= Double(cfg.vision.gestureStableMs) {
+                    await beginShootFlow(reason: "手势命中（\(g.rawValue) 稳定 \(cfg.vision.gestureStableMs) ms）")
+                } else {
+                    Log.session.debug("手势命中 \(g.rawValue) \(Int(heldMs))/\(cfg.vision.gestureStableMs) ms")
                 }
-            } else if gestureStreak > 0 {
-                gestureStreak = 0
-                Log.session.debug("手势中断，连续计数清零")
+            } else {
+                gestureSince = nil    // 手势中断，重新起算
+                // 人离开回退：手势未命中帧顺带跑一次就绪检测，人持续消失回 idle，
+                // 不必等满 gestureTimeoutSec（armed 态同款机制）
+                guard cfg.vision.poseReadinessEnabled else { return }
+                let r = await readiness.detectReadiness(in: frame)
+                guard case .gestureWait = state else { return }
+                if r.humanPresent {
+                    absentSince = nil
+                } else {
+                    let since = absentSince ?? Date()
+                    absentSince = since
+                    let heldMs = Date().timeIntervalSince(since) * 1000
+                    if heldMs >= Double(cfg.vision.absentStableMs) {
+                        await resetToIdle("人离开画面（持续 \(cfg.vision.absentStableMs) ms）")
+                    }
+                }
             }
 
         default:
@@ -721,9 +753,9 @@ public actor SessionCoordinator {
     }
 
     private func resetStreaks() {
-        readyStreak = 0
-        absentStreak = 0
-        gestureStreak = 0
+        readySince = nil
+        absentSince = nil
+        gestureSince = nil
     }
 
     /// 状态的可读描述（日志用）

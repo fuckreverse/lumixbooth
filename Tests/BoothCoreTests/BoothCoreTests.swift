@@ -96,6 +96,11 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(cfg.capture.idleSlideshow, true)
         XCTAssertEqual(cfg.capture.idleSlideshowSec, 6)
         XCTAssertEqual(cfg.capture.defaultMode.layout, .strip, "旧 mode 无 layout 应回退 strip")
+        // 视觉段：旧帧数字段（readyFrames/gestureHitFrames）已废弃，
+        // 缺新时长字段应回落默认值
+        XCTAssertEqual(cfg.vision.readyStableMs, 1200)
+        XCTAssertEqual(cfg.vision.gestureStableMs, 350)
+        XCTAssertEqual(cfg.vision.absentStableMs, 1000)
         // 修图段新字段默认值
         XCTAssertEqual(cfg.imaging.filterSelection, true)
         XCTAssertEqual(cfg.imaging.defaultFilter, .none)
@@ -124,12 +129,18 @@ final class BoothCoreTests: XCTestCase {
         cfg.printing.printingDwellSec = 8
         cfg.printing.printKeyEnabled = false
         cfg.printing.showPrintButton = false
+        cfg.vision.readyStableMs = 800
+        cfg.vision.gestureStableMs = 200
+        cfg.vision.absentStableMs = 600
         let data = try JSONEncoder().encode(cfg)
         let back = try JSONDecoder().decode(BoothConfig.self, from: data)
         XCTAssertEqual(back, cfg)
         XCTAssertEqual(back.capture.defaultMode.layout, .grid2x2)
         XCTAssertEqual(back.imaging.defaultFilter, .nostalgia)
         XCTAssertEqual(back.printing.printingDwellSec, 8)
+        XCTAssertEqual(back.vision.readyStableMs, 800)
+        XCTAssertEqual(back.vision.gestureStableMs, 200)
+        XCTAssertEqual(back.vision.absentStableMs, 600)
     }
 
     /// 老 config.json（无 dryRun 等新字段）必须能解码，缺省字段回落默认值

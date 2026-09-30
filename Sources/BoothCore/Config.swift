@@ -122,11 +122,31 @@ public struct BoothConfig: Codable, Sendable, Equatable {
     public struct VisionConf: Codable, Sendable, Equatable {
         public var gestureEnabled = true
         public var poseReadinessEnabled = true
-        public var gestureHitFrames = 5           // 手势连续命中帧数
-        public var readyFrames = 15               // 就绪连续帧数
-        public var minFaceAreaRatio = 0.01        // 人脸最小面积占比
-        public var detectEveryNFrames = 3         // 每 N 帧 LiveView 检测一次（控耗）
+        // 防抖为时长语义（毫秒）：连续稳定 X ms 才算命中，对 LiveView 帧率波动免疫。
+        // 旧配置的帧数字段（readyFrames/gestureHitFrames）已废弃，解码时忽略。
+        public var readyStableMs = 1200          // 姿势就绪需连续稳定时长
+        public var gestureStableMs = 350         // 手势需连续稳定时长
+        public var absentStableMs = 1000         // 人离开画面判定时长（armed/gestureWait 共用）
+        public var minFaceAreaRatio = 0.01       // 人脸最小面积占比
+        public var detectEveryNFrames = 3        // 每 N 帧 LiveView 检测一次（控耗）
         public init() {}
+
+        // 向后兼容解码：老配置缺新字段（或只有旧帧数字段）→ 默认值
+        private enum CodingKeys: String, CodingKey {
+            case gestureEnabled, poseReadinessEnabled
+            case readyStableMs, gestureStableMs, absentStableMs
+            case minFaceAreaRatio, detectEveryNFrames
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            gestureEnabled = try c.decodeIfPresent(Bool.self, forKey: .gestureEnabled) ?? true
+            poseReadinessEnabled = try c.decodeIfPresent(Bool.self, forKey: .poseReadinessEnabled) ?? true
+            readyStableMs = try c.decodeIfPresent(Int.self, forKey: .readyStableMs) ?? 1200
+            gestureStableMs = try c.decodeIfPresent(Int.self, forKey: .gestureStableMs) ?? 350
+            absentStableMs = try c.decodeIfPresent(Int.self, forKey: .absentStableMs) ?? 1000
+            minFaceAreaRatio = try c.decodeIfPresent(Double.self, forKey: .minFaceAreaRatio) ?? 0.01
+            detectEveryNFrames = try c.decodeIfPresent(Int.self, forKey: .detectEveryNFrames) ?? 3
+        }
     }
 
     public struct ImagingConf: Codable, Sendable, Equatable {
@@ -289,8 +309,9 @@ extension BoothConfig {
         c.capture.armedTimeoutSec = c.capture.armedTimeoutSec.clamped(3...120)
         c.capture.defaultMode.shots = c.capture.defaultMode.shots.clamped(1...8)
         // 视觉
-        c.vision.gestureHitFrames = c.vision.gestureHitFrames.clamped(1...30)
-        c.vision.readyFrames = c.vision.readyFrames.clamped(1...60)
+        c.vision.readyStableMs = c.vision.readyStableMs.clamped(0...30_000)
+        c.vision.gestureStableMs = c.vision.gestureStableMs.clamped(0...10_000)
+        c.vision.absentStableMs = c.vision.absentStableMs.clamped(0...30_000)
         c.vision.minFaceAreaRatio = c.vision.minFaceAreaRatio.clamped(0.0001...0.25)
         c.vision.detectEveryNFrames = c.vision.detectEveryNFrames.clamped(1...30)
         // 修图

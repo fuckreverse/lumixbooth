@@ -123,8 +123,8 @@ final class SessionCoordinatorTests: XCTestCase {
             c.capture.reviewTimeoutSec = 60
             c.capture.layoutSelection = false   // 本测试验证不选片的直接出片路径
             c.vision.detectEveryNFrames = 1
-            c.vision.readyFrames = 2
-            c.vision.gestureHitFrames = 2
+            c.vision.readyStableMs = 0
+            c.vision.gestureStableMs = 0
         }
         let coord = makeSUT()
         await coord.begin()
@@ -296,7 +296,7 @@ final class SessionCoordinatorTests: XCTestCase {
         await configure { c in
             c.capture.gestureTimeoutSec = 1
             c.vision.detectEveryNFrames = 1
-            c.vision.readyFrames = 2
+            c.vision.readyStableMs = 0
         }
         let coord = makeSUT()
         await coord.begin()
@@ -316,7 +316,7 @@ final class SessionCoordinatorTests: XCTestCase {
         await configure { c in
             c.capture.armedTimeoutSec = 1
             c.vision.detectEveryNFrames = 1
-            c.vision.readyFrames = 15 // 永远凑不满就绪帧
+            c.vision.readyStableMs = 5000 // 永不达成就绪稳定窗口
         }
         let coord = makeSUT()
         await coord.begin()
@@ -337,7 +337,8 @@ final class SessionCoordinatorTests: XCTestCase {
         await configure { c in
             c.capture.armedTimeoutSec = 30
             c.vision.detectEveryNFrames = 1
-            c.vision.readyFrames = 2
+            c.vision.readyStableMs = 5000 // 人站定与否都保持 armed，不进 gestureWait
+            c.vision.absentStableMs = 0   // 人一帧即判离场
         }
         let coord = makeSUT()
         await coord.begin()
@@ -819,7 +820,7 @@ final class SessionCoordinatorTests: XCTestCase {
             c.capture.triggerStyle = .countdown
             c.capture.layoutSelection = false
             c.vision.detectEveryNFrames = 1
-            c.vision.readyFrames = 2
+            c.vision.readyStableMs = 0
         }
         let coord = makeSUT()
         await coord.begin()
