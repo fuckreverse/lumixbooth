@@ -850,4 +850,125 @@ final class SessionCoordinatorTests: XCTestCase {
         m = await coord.mode
         XCTAssertEqual(m, .single)
     }
+
+    // MARK: - actor 重入竞态（await 后状态复验）
+
+    /// idle 态在途就绪检测期间手动 start() 开拍：检测恢复后不应把流程状态打回 armed
+    func testIdleDetectionInFlightDoesNotOverrideManualStart() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyStableMs = 0
+        }
+        readiness.readiness = MockReadiness.ready()
+        readiness.detectDelay = 0.15   // 检测在途时外部可插入 start()
+        let coord = makeSUT()
+        await coord.begin()
+
+        camera.pushFrame()             // idle 检测启动，卡 0.15s
+        let det = readiness
+        await expect("idle 检测应已在途") { det.detectCount >= 1 }
+        await coord.start()            // 检测在途时手动触发（竞态窗口）
+
+        await expect("手动流程应完成进入 review") { isReview(await coord.state) }
+        // 等在途检测结束并确认它没有污染状态机
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        await expect("流程不应被在途检测打回 armed") { isReview(await coord.state) }
+        await settle()
+        let states = recorder.states
+        let captureIdx = states.firstIndex(where: isCapturing)
+        XCTAssertNotNil(captureIdx, "手动触发应产生 capturing")
+        if let captureIdx {
+            XCTAssertFalse(states[(captureIdx + 1)...].contains(.armed),
+                          "在途检测不应把已开拍流程打回 armed（实际序列: \(states)）")
+        }
+    }
+
+    /// armed 态在途就绪检测期间 cancel()：检测恢复后不应复活状态机
+    func testArmedDetectionInFlightIgnoredAfterCancel() async {
+        await configure { c in
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyStableMs = 0   // 任何就绪帧都会推进到 gestureWait
+        }
+        readiness.readiness = MockReadiness.ready()
+        readiness.detectDelay = 0.15
+        let coord = makeSUT()
+        await coord.begin()
+
+        camera.pushFrame()
+        await expect("应进入 armed") { await coord.state == .armed }
+        camera.pushFrame()             // armed 检测在途（0.15s）
+        let det = readiness
+        await expect("armed 检测应已在途") { det.detectCount >= 2 }   // 首帧 idle + 本帧 armed
+        await coord.cancel()           // 在途时取消
+
+        // 等待在途检测结束（不加复验它会推进到 gestureWait）
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        let finalState = await coord.state
+        XCTAssertEqual(finalState, .idle, "在途检测不应在取消后复活状态机")
+    }
+
+    // MARK: - gestureWait 增强
+
+    /// gestureWait 态人离场：不必等满 gestureTimeoutSec，人持续消失即回 idle
+    func testGestureWaitPersonAbsentBackToIdle() async {
+        await configure { c in
+            c.capture.gestureTimeoutSec = 30   // 排除超时路径
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyStableMs = 0
+            c.vision.absentStableMs = 0        // 人一帧即判离场
+        }
+        readiness.readiness = MockReadiness.ready()
+        let coord = makeSUT()
+        await coord.begin()
+
+        camera.pushFrame()
+        await expect("应进入 armed") { await coord.state == .armed }
+        camera.pushFrame()
+        await expect("应进入 gestureWait") { await coord.state == .gestureWait }
+
+        // 人离场（无手势 + 无人）→ 应直接回 idle，而不是傻等 30s 超时
+        readiness.readiness = .empty
+        camera.pushFrame()
+        await expect("gestureWait 人消失应回 idle", timeout: 5) { await coord.state == .idle }
+        await settle()
+        assertInOrder(recorder.states, [.armed, .gestureWait, .idle])
+    }
+
+    /// 换手势重置稳定窗口：交替切换手势不应触发拍摄，稳定同一手势才触发
+    func testGestureSwitchResetsStableWindow() async {
+        await configure { c in
+            c.capture.countdownSec = 0
+            c.capture.defaultMode = .single
+            c.capture.reviewTimeoutSec = 60
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyStableMs = 0
+            c.vision.gestureStableMs = 400   // 需同一手势稳定 400ms
+        }
+        readiness.readiness = MockReadiness.ready()
+        let coord = makeSUT()
+        await coord.begin()
+
+        camera.pushFrame()
+        await expect("应进入 armed") { await coord.state == .armed }
+        camera.pushFrame()
+        await expect("应进入 gestureWait") { await coord.state == .gestureWait }
+
+        // 4 帧交替 peace/openPalm：每次换手势都重置计时，即使整体超 400ms 也不触发
+        gesture.responses = [.peace, .openPalm, .peace, .openPalm]
+        for _ in 0..<4 { camera.pushFrame() }
+        try? await Task.sleep(nanoseconds: 500_000_000)   // 超过稳定窗口，但无连续同一手势
+        let midState = await coord.state
+        XCTAssertEqual(midState, .gestureWait, "交替手势不应触发拍摄")
+
+        // 稳定 peace：第一帧起算，跨过稳定窗口后下一帧触发
+        gesture.responses = nil
+        gesture.gesture = .peace
+        camera.pushFrame()                                 // 起算
+        try? await Task.sleep(nanoseconds: 500_000_000)   // 稳定 500ms > 400ms
+        camera.pushFrame()                                 // 此帧判定 heldMs≥400 → 开拍
+        await expect("稳定同一手势应触发拍摄") { isReview(await coord.state) }
+    }
 }
