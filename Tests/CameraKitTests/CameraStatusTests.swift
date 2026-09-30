@@ -6,7 +6,8 @@ import Foundation
 // ============================================================
 // 电量/存储状态功能测试（2026-09 新增，不接真机）
 //  - LmxBatteryInfo 16B 布局与解析（逆向 @0x42400 的回归保险）
-//  - 事件 CBID 修正回归（0x0E000254/57 → 0x10000000/01/02）
+//  - 事件 CBID 修正回归（0x0E000254/57 → 0x10000000/01/02；
+//    E6 勘误：dataTransferProg=0x11000000、reqObjTransfer=0x10000043、deviceReset=0x1FF20003）
 //  - CameraStatusReport 百分比启发式
 //  - Mock 状态轮询流
 // ============================================================
@@ -48,18 +49,31 @@ final class CameraStatusTests: XCTestCase {
 
     // MARK: - 事件 CBID 修正回归（逆向自 Send_NotifyMsg_* @0x445F4/0x446FC/0x44808）
 
+    /// 对照 docs/lumix-tether-analysis/02-events.md 官方逆向真值表：
+    /// 静态出口函数硬编码 CBID + decompiled DACB_CallbackRegist/UnRegist 交叉验证。
     func testEventCBIDs() {
         XCTAssertEqual(LmxEvent.objectAdded, 0x10000040)
-        XCTAssertEqual(LmxEvent.dataTransferProg, 0x10000081)
+        // E6 勘误：Send_NotifyMsg_DataTransferProgress @0x450c4 硬编码 0x11000000；
+        // 旧值 0x10000081 仅作 legacy 双监听兼容保留
+        XCTAssertEqual(LmxEvent.dataTransferProg, 0x11000000)
+        XCTAssertEqual(LmxEvent.dataTransferProgLegacy, 0x10000081)
         XCTAssertEqual(LmxEvent.deviceStray, 0x10000010)
-        XCTAssertEqual(LmxEvent.reqObjTransfer, 0x10000100)
-        // 修正后：旧 lmx.py 的 0x0E000254/57 是 PTP 标准事件码，注册无效
+        XCTAssertEqual(LmxEvent.deviceStrayAlt, 0x1FF20001)
+        // E6 勘误：reqObjTransfer 真值 0x10000043（旧值 0x10000100 静态表中不存在）
+        XCTAssertEqual(LmxEvent.reqObjTransfer, 0x10000043)
         XCTAssertEqual(LmxEvent.storeAdded, 0x10000000)
         XCTAssertEqual(LmxEvent.storeRemoved, 0x10000001)
         XCTAssertEqual(LmxEvent.storageInfoChanged, 0x10000002)
-        // 三个存储事件互不相同（防手滑写重）
-        XCTAssertNotEqual(LmxEvent.storeAdded, LmxEvent.storeRemoved)
-        XCTAssertNotEqual(LmxEvent.storeRemoved, LmxEvent.storageInfoChanged)
+        // E6 勘误：deviceReset 旧值 0x10000001 与 storeRemoved 撞值，改 0x1FF20003
+        XCTAssertEqual(LmxEvent.deviceReset, 0x1FF20003)
+        // 全表互不相同（防手滑写重；E6 前deviceReset/storeRemoved 就栽在撞值上）
+        let all: [UInt32] = [
+            LmxEvent.objectAdded, LmxEvent.dataTransferProg, LmxEvent.dataTransferProgLegacy,
+            LmxEvent.deviceStray, LmxEvent.deviceStrayAlt, LmxEvent.deviceReset,
+            LmxEvent.reqObjTransfer, LmxEvent.storeAdded, LmxEvent.storeRemoved,
+            LmxEvent.storageInfoChanged,
+        ]
+        XCTAssertEqual(Set(all).count, all.count, "事件 CBID 存在撞值")
     }
 
     // MARK: - CameraStatusReport 百分比启发式
