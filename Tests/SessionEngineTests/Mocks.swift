@@ -81,6 +81,10 @@ final class MockGesture: GestureDetecting, @unchecked Sendable {
     private let lock = NSLock()
     private var _gesture: DetectedGesture?
     private var _detectCount = 0
+    /// 每次检测前的人工延迟（测竞态/防抖时长用）
+    var detectDelay: TimeInterval = 0
+    /// 非空时按次返回（循环取用），用完后回落 gesture；测“同一手势才累计”用
+    var responses: [DetectedGesture?]?
 
     /// 每次检测固定返回该手势（nil = 未检出）
     var gesture: DetectedGesture? {
@@ -91,8 +95,17 @@ final class MockGesture: GestureDetecting, @unchecked Sendable {
     var detectCount: Int { lock.withLock { _detectCount } }
 
     func detectGesture(in jpeg: Data) async -> DetectedGesture? {
-        lock.withLock { _detectCount += 1 }
-        return gesture
+        let result: DetectedGesture? = lock.withLock {
+            _detectCount += 1
+            if let list = responses, !list.isEmpty, _detectCount <= list.count {
+                return list[_detectCount - 1]   // 第 N 次检测返回第 N 项，超出后回落 gesture
+            }
+            return _gesture
+        }
+        if detectDelay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(detectDelay * 1_000_000_000))
+        }
+        return result
     }
 }
 
@@ -102,6 +115,8 @@ final class MockReadiness: PoseReadinessDetecting, @unchecked Sendable {
     private let lock = NSLock()
     private var _readiness = PoseReadiness.empty
     private var _detectCount = 0
+    /// 每次检测前的人工延迟（测竞态用：检测在途时外部改状态）
+    var detectDelay: TimeInterval = 0
 
     var readiness: PoseReadiness {
         get { lock.withLock { _readiness } }
@@ -112,6 +127,9 @@ final class MockReadiness: PoseReadinessDetecting, @unchecked Sendable {
 
     func detectReadiness(in jpeg: Data) async -> PoseReadiness {
         lock.withLock { _detectCount += 1 }
+        if detectDelay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(detectDelay * 1_000_000_000))
+        }
         return readiness
     }
 
