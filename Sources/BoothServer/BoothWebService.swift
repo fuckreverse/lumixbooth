@@ -177,6 +177,11 @@ public actor BoothWebService: BoothWebServing {
     public nonisolated var port: UInt16 { portBox.value }
     public nonisolated var commands: AsyncStream<iPadCommand> { commandHub.makeStream() }
 
+    /// 当前 WS 在线客户端数（iPad 宾客屏连接数；操作台镜像面板轮询用）
+    public func clientCount() async -> Int {
+        sessions.values.filter { $0.mode == .websocket }.count
+    }
+
     // MARK: - 生命周期（幂等）
 
     public func start() async throws {

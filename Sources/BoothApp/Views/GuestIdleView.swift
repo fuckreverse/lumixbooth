@@ -112,7 +112,7 @@ struct GuestIdleView: View {
                     .padding(10)
                     .background(theme.backgroundSecondaryColor,
                                 in: RoundedRectangle(cornerRadius: theme.cornerRadiusSmall, style: .continuous))
-                Text("iPad 扫码当确认屏")
+                Text("iPad 扫码成为宾客屏")
                     .font(theme.bodyFont(15, weight: .bold))
                     .foregroundStyle(theme.textSecondaryColor)
             } else {

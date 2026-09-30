@@ -1,9 +1,11 @@
 import Foundation
 
 // ============================================================
-// iPad 单页应用（GET / 的响应体）
+// iPad 宾客大屏（GET / 的响应体）
 //  - 全部内嵌为 Swift 字符串常量，零静态资源文件
 //  - vanilla JS，无框架；MJPEG 用 <img src="/live">（Safari 原生支持）
+//  - iPad 是唯一朝向宾客的屏：armed/gestureWait/countdown/capturing
+//    全屏取景（镜像翻转）+ 姿势引导卡；idle 吸引页背景历史成片轮播
 //  - 视觉风格与 BoothUI 一致：奶油底 #FFF7F0 / 蜜桃粉 #FF8FAB /
 //    大圆角 / 大字号，全中文可爱风
 //  - WS 协议（与 BoothWebService 对应）：
@@ -40,18 +42,44 @@ enum WebAssets {
           header { padding:20px 24px 4px; text-align:center; font-size:22px; font-weight:700; letter-spacing:3px; }
           main { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
           .card { text-align:center; max-width:92%; }
+          /* 内容层浮于取景/轮播层之上 */
+          header, main { position:relative; z-index:2; }
 
           /* 连接指示点 */
           .dot { position:fixed; top:18px; left:18px; width:16px; height:16px; border-radius:50%;
                  background:#D8CCC6; z-index:9; transition:background .3s; }
           .dot.on { background:#7BC47F; box-shadow:0 0 14px #7BC47F; }
 
-          /* 顶部 LiveView 小窗（点击可收起/展开；成片确认与打印时自动隐藏） */
+          /* 实时取景：<img> 单实例在 livebox(待机小窗，供操作员检查构图) 与
+             livefull(全屏取景) 之间搬移，同一 MJPEG 连接不重建 */
           #livebox { position:fixed; top:14px; right:14px; width:184px; border-radius:18px; overflow:hidden;
                      border:5px solid #fff; box-shadow:0 10px 26px rgba(91,74,79,.22); z-index:8;
-                     background:#fff; }
+                     background:#fff; display:none; }
           #livebox img { display:block; width:100%; min-height:70px; }
-          #livebox.hidden, body.review #livebox, body.printing #livebox, body.countdown #livebox { display:none; }
+          body.idle #livebox { display:block; }
+          #livebox.hidden { display:none !important; }
+
+          /* 全屏取景层（armed/gestureWait/countdown/capturing）：镜像翻转像照镜子 */
+          #livefull { position:fixed; inset:0; display:none; background:#2B2225; z-index:0; }
+          #livefull img { width:100%; height:100%; object-fit:contain; transform:scaleX(-1); }
+          body.framed #livefull { display:block; }
+
+          /* 待机背景历史成片轮播（同 Mac 吸引页：12% 透明度不干扰前景） */
+          #idlebg { position:fixed; inset:0; display:none; background-size:cover; background-position:center;
+                    opacity:0; transition:opacity 1s; z-index:0; filter:blur(1px); }
+          body.idle #idlebg { display:block; }
+
+          /* 全屏取景态：提示卡沉底，隐藏页眉/链接保持画面纯粹；倒计时数字仍居中 */
+          body.framed header, body.framed .links { display:none; }
+          body.framed main { align-items:flex-end; padding-bottom:9vh; }
+          body.framed.countdown main { align-items:center; padding-bottom:24px; }
+
+          /* 姿势引导卡（贴在全屏取景下方，同 Mac GuestGuidanceView） */
+          .guide-card { background:rgba(255,255,255,.93); border-radius:28px; padding:22px 40px;
+                        box-shadow:0 14px 34px rgba(91,74,79,.32); text-align:center; }
+          .guide-emoji { font-size:64px; line-height:1.2; }
+          .guide-emoji .eic { width:84px; height:84px; }
+          .guide-text { font-size:27px; font-weight:700; margin-top:8px; }
 
           .big-emoji { font-size:118px; line-height:1.25; }
           .big-emoji img { width:190px; height:190px; object-fit:contain; }
@@ -130,6 +158,8 @@ enum WebAssets {
         </head>
         <body>
           <div id="dot" class="dot"></div>
+          <div id="idlebg"></div>
+          <div id="livefull"></div>
           <header>LUMIX 拍照屋</header>
           <div id="livebox"><img id="liveimg" alt="实时取景" src="/live"></div>
           <main><div class="card" id="stage"></div></main>
@@ -145,6 +175,13 @@ enum WebAssets {
         var stage   = document.getElementById('stage');
         var livebox = document.getElementById('livebox');
         var liveimg = document.getElementById('liveimg');
+        var livefull = document.getElementById('livefull');
+
+        // 取景 <img> 在小窗与全屏层之间搬移（同元素 → 同一 MJPEG 连接不重建）
+        function placeLive(framed) {
+          var box = framed ? livefull : livebox;
+          if (liveimg.parentNode !== box) box.appendChild(liveimg);
+        }
 
         // 主题图标：优先显示主题包插画（/theme/icon/<key>.png），加载失败回退 emoji 文本
         function ic(key, emoji, cls) {
@@ -183,15 +220,18 @@ enum WebAssets {
           // 打印完成（printing → idle）：先显示"请取照片"再回待机
           if (cur === 'printing' && s === 'idle') { renderTakePhoto(); return; }
           cur = s;
-          document.body.classList.toggle('review',    s === 'review');
-          document.body.classList.toggle('printing',  s === 'printing');
-          document.body.classList.toggle('countdown', s === 'countdown');
+          var framed = (s === 'armed' || s === 'gestureWait' || s === 'countdown' || s === 'capturing');
+          document.body.className = s + (framed ? ' framed' : '');
           if (takeTimer) { clearTimeout(takeTimer); takeTimer = null; }
+          placeLive(framed);
+          if (s === 'idle') startSlides(); else stopSlides();
 
           if (s === 'countdown') {
             stage.innerHTML = '<div class="countdown">' + (m.secondsLeft || 0) + '</div>';
             return;
           }
+          if (s === 'armed' || s === 'gestureWait') { renderGuide(s); return; }
+          if (s === 'capturing') { renderCapturing(m); return; }
           if (s === 'select' && m.shots) {
             selLayouts = m.layouts || [];
             selDefault = m.defaultLayout || 'strip';
@@ -213,9 +253,6 @@ enum WebAssets {
           }
           var map = {
             idle:       ['camera', '📸', '看镜头准备拍照'],
-            armed:      ['smile', '😊', '站好啦，看镜头'],
-            gestureWait:['peace', '✌️', '比个耶，开始拍照！'],
-            capturing:  ['camera', '📷', '拍摄中'],
             processing: ['sparkle', '✨', '正在修图'],
             printing:   ['printer', '🖨️', '已加入打印队列']
           };
@@ -236,6 +273,30 @@ enum WebAssets {
             return;
           }
           stage.innerHTML = '<div class="big-emoji">' + ic('camera', '📷') + '</div><div class="big-text">LUMIX 拍照屋</div>';
+        }
+
+        // 全屏取景期（armed/gestureWait）：取景铺满 + 底部姿势引导卡（同 Mac GuestGuidanceView）
+        function renderGuide(s) {
+          var pose = s === 'armed'
+            ? { icons: ['stand', '👀'],  emojis: ['🧍‍♀️', '👀'], text: '站好啦，看着你啦' }
+            : { icons: ['peace', 'wave'], emojis: ['✌️', '👋'], text: '比个耶或挥手，开始拍照' };
+          stage.innerHTML =
+            '<div class="guide-card">' +
+              '<div class="guide-emoji">' + pose.icons.map(function (k, i) {
+                return ic(k, pose.emojis[i], 'eic');
+              }).join('') + '</div>' +
+              '<div class="guide-text">' + pose.text + '</div>' +
+            '</div>';
+        }
+
+        // 全屏取景期（capturing）：取景铺满 + 大字拍摄提示（同 Mac GuestCapturingView）
+        function renderCapturing(m) {
+          var sub = (m.shot && m.of) ? '第 ' + m.shot + ' / ' + m.of + ' 张' : '';
+          stage.innerHTML =
+            '<div class="guide-card">' +
+              '<div class="guide-emoji">' + ic('camera', '📷', 'eic') + '</div>' +
+              '<div class="guide-text">拍摄中 ' + (sub ? '· ' + sub : '') + '</div>' +
+            '</div>';
         }
 
         // 待机页拍摄模式选择（单张 / 四连拍拼图）
@@ -457,6 +518,56 @@ enum WebAssets {
           }
         });
 
+        // ---------- 待机背景历史成片轮播（同 Mac 吸引页：12% 透明度） ----------
+        var slideTimer = null, slidePhotos = [], slideIndex = 0, slideOn = false;
+        function startSlides() {
+          if (slideOn) return;
+          slideOn = true;
+          fetch('/api/photos').then(function (r) { return r.json(); })
+            .then(function (d) {
+              slidePhotos = (d.photos || []).map(function (p) { return p.url; });
+              if (slidePhotos.length > 1) { slidePhotos.sort(function () { return Math.random() - 0.5; }); }
+              showSlide();
+              if (!slideTimer && slidePhotos.length > 1) {
+                slideTimer = setInterval(function () {
+                  slideIndex = (slideIndex + 1) % slidePhotos.length;
+                  showSlide();
+                }, 5000);
+              }
+            })
+            .catch(function () {});
+        }
+        function showSlide() {
+          var bg = document.getElementById('idlebg');
+          if (!bg || !slidePhotos.length) return;
+          if (!slidePhotos[slideIndex]) { bg.style.opacity = '0'; return; }
+          // 预加载新图，加载完成再淡入，避免闪空
+          var probe = new Image();
+          probe.onload = function () { bg.style.backgroundImage = 'url("' + probe.src + '")'; bg.style.opacity = '0.12'; };
+          probe.src = slidePhotos[slideIndex];
+        }
+        function stopSlides() {
+          slideOn = false;
+          if (slideTimer) { clearInterval(slideTimer); slideTimer = null; }
+          var bg = document.getElementById('idlebg');
+          if (bg) { bg.style.opacity = '0'; }
+        }
+
+        // ---------- 屏幕常亮（iPad Safari；不支持时静默降级，需配合引导式访问） ----------
+        var wakeLock = null;
+        function keepAwake() {
+          if (!navigator.wakeLock) return;
+          navigator.wakeLock.request('screen').then(function (l) {
+            wakeLock = l;
+            l.addEventListener('release', function () { wakeLock = null; });
+          }).catch(function () {});
+          // 页面重新可见时补请求（iOS 切后台会释放 Wake Lock）
+          document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible' && !wakeLock) keepAwake();
+          });
+        }
+        keepAwake();
+
         render({ state: 'idle' });
         connect();
         </script>
@@ -494,7 +605,7 @@ enum WebAssets {
         </style>
         </head>
         <body>
-          <header>\#(title)<br><a href="/">← 回拍照确认屏</a></header>
+          <header>\#(title)<br><a href="/">← 回宾客屏</a></header>
           <main>\#(bodyHTML)</main>
         <script>
         \#(script)

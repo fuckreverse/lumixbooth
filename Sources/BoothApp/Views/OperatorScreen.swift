@@ -3,7 +3,8 @@ import BoothCore
 import BoothUI
 
 // ============================================================
-// 操作员页：状态 / 设置 / 历史 / 日志 四页签（Esc 返回宾客大屏）
+// 操作员操作台（状态 / 设置 / 历史 / 日志 四页签）
+//  - 默认与宾客镜像面板并排常驻（Esc 往返宾客画面全屏）
 //  - 自定义主题页签条（不用原生 TabView：macOS TabView 的
 //    StatefulTabContainer 在高频内容刷新 + 切页后会产生
 //    AttributeGraph 依赖环，主线程陷入 print_cycle 死循环卡死）
@@ -53,7 +54,7 @@ struct OperatorScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部条：标题 + 返回大屏（每次返回都会重新上锁）
+            // 顶部条：标题 + 宾客画面全屏（每次切换都会重新上锁）
             HStack {
                 HStack(spacing: 10) {
                     Text("操作员后台")
@@ -65,7 +66,7 @@ struct OperatorScreen: View {
                 if composition.isMock {
                     BoothStatusPill(emoji: "🧪", text: "Mock 模式", tint: theme.warningColor)
                 }
-                BoothSecondaryButton("返回大屏", emoji: "🔙") {
+                BoothSecondaryButton("宾客画面全屏", emoji: "⤢") {
                     composition.showingOperator = false
                 }
             }
@@ -108,7 +109,7 @@ struct OperatorScreen: View {
             historyVM.reload()
             healthVM.start()
         }
-        // 返回宾客大屏：退订日志增量（Mock 相机逐帧打日志，不退订会持续攒批）
+        // 切回宾客画面全屏：退订日志增量（Mock 相机逐帧打日志，不退订会持续攒批）
         .onDisappear { logsVM.stop() }
     }
 

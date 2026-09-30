@@ -47,8 +47,9 @@ final class AppComposition: ObservableObject {
     /// 健康监控（操作员页卡片 + /api/health 数据源；周期采样落盘 health.json）
     let health: HealthMonitor
 
-    /// 是否显示操作员页（Esc / 齿轮按钮切换）
-    @Published var showingOperator = false
+    /// 是否显示操作台（默认是：Mac 定位为操作员主机，右侧常驻宾客镜像；
+    /// false = 宾客画面全屏，Esc 往返切换，切换不影响 iPad 与拍照流程）
+    @Published var showingOperator = true
     /// Web 服务是否在跑（idle 页决定是否显示二维码）
     @Published var serverRunning = false
     /// iPad 访问地址（服务启动后算出，供二维码）
@@ -321,7 +322,7 @@ struct BoothAppMain: App {
     }
 }
 
-// MARK: - 根视图（宾客大屏 ⇄ 操作员页）
+// MARK: - 根视图（操作台 + 常驻宾客镜像 ⇄ 宾客画面全屏）
 
 struct RootView: View {
     @Environment(\.boothTheme) private var theme
@@ -339,15 +340,28 @@ struct RootView: View {
     var body: some View {
         ZStack {
             if composition.showingOperator {
-                if gate.isLocked {
-                    // 门禁锁屏：验证前不暴露任何操作员界面
-                    OperatorLockView(gate: gate)
-                        .transition(.opacity)
-                } else {
-                    OperatorScreen(composition: composition)
-                        .transition(.opacity)
+                // 操作台形态：左侧操作员区（门禁锁屏 / 四页签）+ 右侧宾客镜像常驻。
+                // 镜像与 iPad 同源（同一 GuestViewModel），切页/看队列互不影响
+                HStack(spacing: 0) {
+                    Group {
+                        if gate.isLocked {
+                            // 门禁锁屏：验证前不暴露任何操作员界面（宾客镜像不受影响）
+                            OperatorLockView(gate: gate)
+                                .transition(.opacity)
+                        } else {
+                            OperatorScreen(composition: composition)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Divider()
+
+                    GuestMirrorPanel(composition: composition, vm: guestVM)
+                        .frame(minWidth: 360, idealWidth: 540, maxWidth: 680)
                 }
             } else {
+                // 宾客画面全屏（细看/演示用；iPad 与拍照流程不受切换影响）
                 GuestScreen(composition: composition, vm: guestVM)
                     .transition(.opacity)
             }
@@ -357,8 +371,9 @@ struct RootView: View {
         .background(theme.backgroundColor.ignoresSafeArea())
         .focusable()
         .focusEffectDisabled()
-        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，P=打印（操作员），Esc=操作员页往返。
-        // 操作员页打开时空格/R 不触发拍摄（防宾客按 Esc 后空格还能隔着锁屏拍照）
+        // 快捷键（SPEC §9）：空格=手动触发，R=重拍，P=打印（操作员），
+        // Esc=操作台⇄宾客画面全屏往返。宾客画面全屏时空格/R 才触发拍摄
+        // （防操作台模式下输入框打字误触发）
         .onKeyPress(.space) {
             guard !composition.showingOperator else { return .handled }
             guestVM.triggerStart(); return .handled
@@ -374,7 +389,12 @@ struct RootView: View {
         .onKeyPress(KeyEquivalent("p")) { handlePrintKey(); return .handled }
         .onKeyPress(KeyEquivalent("P")) { handlePrintKey(); return .handled }
         .onKeyPress(.escape) { toggleOperatorPage(); return .handled }
-        .task { guestVM.start() }
+        .task {
+            guestVM.start()
+            // 启动即按当前保护状态初始化门禁（操作台为默认形态；
+            // 放弃保护者直接放行，设 PIN 者保持锁定等待验证）
+            await gate.entryRequested()
+        }
         // 进入操作员页：门禁拦截（放弃保护者自动放行）；返回宾客大屏：重新上锁
         .onChange(of: composition.showingOperator) { _, showing in
             if showing {
@@ -385,17 +405,11 @@ struct RootView: View {
         }
     }
 
-    /// Esc：进操作员页（同时退出全屏）；在操作员页按 Esc 返回宾客大屏
+    /// Esc：操作台 ⇄ 宾客画面全屏往返（切换只改 Mac 本地视图，
+    /// iPad 显示与拍照流程零影响；进操作台重新验 PIN，去全屏重新上锁）
     private func toggleOperatorPage() {
-        if composition.showingOperator {
-            composition.showingOperator = false
-        } else {
-            if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
-                window.toggleFullScreen(nil)
-            }
-            composition.showingOperator = true
-            Log.ui.info("进入操作员页")
-        }
+        composition.showingOperator.toggle()
+        Log.ui.info(composition.showingOperator ? "进入操作台" : "宾客画面全屏")
     }
 
     /// P 键打印（PhotoBoothProject 借鉴）：操作员兜底打印通道，配置可关
