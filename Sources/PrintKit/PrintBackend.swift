@@ -69,7 +69,20 @@ struct LPPrintBackend: PrintBackend {
         try checkAvailability(config: config)
 
         // ③ 组装并执行 lp
-        let args = lpArguments(imagePath: imagePath, copies: copies, config: config)
+        var args = lpArguments(imagePath: imagePath, copies: copies, config: config)
+        // Epson's macOS driver exposes 4×6 as EPKG rather than CUPS's generic 4x6 alias.
+        // Use the advertised PageSize so an unsupported media value cannot fall back to A4.
+        if config.paperSize == .six, !config.printerName.isEmpty {
+            let options = runCommand("/usr/bin/lpoptions", ["-p", config.printerName, "-l"])
+            let sizes = options.stdout.split(separator: "\n")
+                .first { $0.hasPrefix("PageSize/") }?
+                .split(separator: ":", maxSplits: 1).last?
+                .split(separator: " ").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "*")) } ?? []
+            let preferred = config.borderless ? "EPKG.NMgn" : "EPKG"
+            if sizes.contains(preferred), let mediaIndex = args.firstIndex(of: "media=\(config.paperSize.cupsMedia(borderless: config.borderless))") {
+                args[mediaIndex] = "media=\(preferred)"
+            }
+        }
         Log.print.info("执行 lp: /usr/bin/lp \(args.joined(separator: " "))")
         let result = runCommand("/usr/bin/lp", args)
         Log.print.info("lp 退出码=\(result.status) stdout=\(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) stderr=\(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -138,12 +151,13 @@ struct LPPrintBackend: PrintBackend {
             .split(separator: "\n")
             .first { line in
                 let tokens = line.split(separator: " ")
-                return tokens.count >= 2 && tokens[0] == "printer" && tokens[1] == target
+                return (tokens.count >= 2 && tokens[0] == "printer" && tokens[1] == target)
+                    || line.hasPrefix("打印机\(target)")
             }
         guard let entry else {
             throw BoothError.printerUnavailable("打印机 '\(target)' 未出现在 lpstat -p 输出中（可能未安装/未共享）。输出:\n\(printers.stdout.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
-        guard entry.contains("enabled") else {
+        guard entry.contains("enabled") || entry.contains("启用时间") else {
             throw BoothError.printerUnavailable("打印机 '\(target)' 处于停用状态: \(entry)")
         }
         Log.print.info("打印机可用: \(entry)")
