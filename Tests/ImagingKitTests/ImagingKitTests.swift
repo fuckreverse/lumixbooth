@@ -309,7 +309,7 @@ final class ImagingKitTests: XCTestCase {
         XCTAssertEqual(result.printFile, photo.printFile)
     }
 
-    /// 六档滤镜算子：全部不抛错、尺寸不变、.none 原图直返
+    /// 九档滤镜算子：全部不抛错、尺寸不变、.none 原图直返
     func testAllStyleFiltersApply() throws {
         let ctx = CIContext()
         let source = try decodeJPEG(makeTestJPEG())
@@ -343,6 +343,35 @@ final class ImagingKitTests: XCTestCase {
         XCTAssertGreaterThan(c.r + c.g + c.b, 0.15, "冷调不应输出全黑")
         XCTAssertGreaterThan(c.b - c.r, base.b - base.r + 0.02,
                              "冷调应让蓝通道相对红通道抬升（B>R 方向）")
+    }
+
+    /// 新增两档风格方向性回归。用中性灰底图断言方向（彩虹测试图色带饱和度极高，
+    /// 去饱和会收窄色差，方向断言会被原图色偏淹没）：
+    /// 老相片应泛黄（R 明显抬升）且四角变暗（暗角）；富士应轻冷（B 相对 R 微抬）且不输出全黑。
+    /// 防止滤镜链键名失效静默跳过（同 warm/cool 历史坑）。
+    func testVintageFujiFilterDirection() throws {
+        let ctx = CIContext()
+        let source = try makeGrayImage()
+        let region = (x: 300, y: 200, w: 300, h: 300)
+        let base = try averageRGB(source, x: region.x, y: region.y, w: region.w, h: region.h)
+        XCTAssertEqual(base.r, base.b, accuracy: 0.01, "灰底图应无色偏")
+
+        let vintage = try PipelineCore.applyStyleFilter(source, filter: .vintage, ctx: ctx)
+        let v = try averageRGB(vintage, x: region.x, y: region.y, w: region.w, h: region.h)
+        XCTAssertGreaterThan(v.r + v.g + v.b, 0.10, "老相片不应输出全黑")
+        XCTAssertGreaterThan(v.r - v.b, 0.05,
+                             "老相片泛黄：R 相对 B 应明显抬升，实际 R-B=\(v.r - v.b)")
+        // 暗角：四角亮度应低于画面中心
+        let cornerL = try averageLuminance(vintage, x: 0, y: 0, w: 120, h: 120)
+        let centerL = try averageLuminance(vintage, x: vintage.width / 2 - 60, y: vintage.height / 2 - 60,
+                                           w: 120, h: 120)
+        XCTAssertLessThan(cornerL, centerL - 0.02, "老相片暗角：四角应比中心暗")
+
+        let fuji = try PipelineCore.applyStyleFilter(source, filter: .fuji, ctx: ctx)
+        let f = try averageRGB(fuji, x: region.x, y: region.y, w: region.w, h: region.h)
+        XCTAssertGreaterThan(f.r + f.g + f.b, 0.15, "富士不应输出全黑")
+        XCTAssertGreaterThan(f.b - f.r, 0.005,
+                             "富士轻冷：B 相对 R 应微抬，实际 B-R=\(f.b - f.r)")
     }
 
     // MARK: - QR 叠印
@@ -460,6 +489,19 @@ final class ImagingKitTests: XCTestCase {
     private func decodeJPEG(_ data: Data) throws -> CGImage {
         let src = CGImageSourceCreateWithData(data as CFData, nil)!
         return try XCTUnwrap(CGImageSourceCreateImageAtIndex(src, 0, nil))
+    }
+
+    /// 生成 900×600 中性灰 CGImage（方向断言用：色温/sepia 类滤镜不受原图色偏干扰）
+    private func makeGrayImage() throws -> CGImage {
+        let ctx = CGContext(
+            data: nil, width: 900, height: 600,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        ctx.setFillColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: 900, height: 600))
+        return try XCTUnwrap(ctx.makeImage())
     }
 
     /// 采样区域平均 RGB（0~1）：画到 sRGB 上下文取三通道均值（暖阳/冷调方向断言用）

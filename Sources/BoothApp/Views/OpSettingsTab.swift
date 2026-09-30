@@ -346,11 +346,11 @@ struct OpSettingsTab: View {
 
                 HStack {
                     label("默认滤镜")
-                    // 主题化分段（原生 Menu 样式与全页不符；7 段短文案放得下）
+                    // 主题化分段（原生 Menu 样式与全页不符；9 档短文案放宽后放得下）
                     BoothSegmented(
                         PhotoFilter.allCases.map { .init($0, "\($0.displayName)") },
                         selection: bind(\.imaging.defaultFilter))
-                        .frame(width: 430)
+                        .frame(width: 560)
                 }
 
                 HStack {

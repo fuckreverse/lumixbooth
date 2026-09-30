@@ -60,13 +60,14 @@ struct GuestReviewView: View {
         .task(id: photo.id) { loadImage() }
     }
 
-    /// 滤镜选择条：六档风格，当前高亮
+    /// 滤镜选择条：自适应网格排布，宽度够时单行、不够自动换行
     private var filterBar: some View {
-        HStack(spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
             ForEach(PhotoFilter.allCases, id: \.rawValue) { f in
                 filterChip(f)
             }
         }
+        .padding(.horizontal, 60)
     }
 
     private func filterChip(_ f: PhotoFilter) -> some View {

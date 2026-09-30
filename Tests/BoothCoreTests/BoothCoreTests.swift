@@ -59,7 +59,9 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(PhotoFilter.parse(""), .none)
         XCTAssertEqual(PhotoFilter.parse("no-such-filter"), .none, "非法值应安全回退 .none")
         XCTAssertEqual(PhotoFilter.parse("glam"), .glam, "新增 glam 档位应可解析")
-        XCTAssertEqual(PhotoFilter.allCases.count, 7)
+        XCTAssertEqual(PhotoFilter.parse("vintage"), .vintage, "新增 vintage 档位应可解析")
+        XCTAssertEqual(PhotoFilter.parse("fuji"), .fuji, "新增 fuji 档位应可解析")
+        XCTAssertEqual(PhotoFilter.allCases.count, 9)
     }
 
     /// 旧版 config.json（v1 无任何新字段）：解码全部走默认值不崩

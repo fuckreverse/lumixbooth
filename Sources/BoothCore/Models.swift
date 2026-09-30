@@ -175,6 +175,8 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
     case cool       // 冷调
     case mono       // 黑白
     case nostalgia  // 复古
+    case vintage    // 老相片（重褪色泛黄 + 暗角 + 颗粒）
+    case fuji       // 富士（胶片感：轻冷青调 + 低反差 + 柔光空气感）
     case glam       // 妆照（磨皮加强+柔光+轻提亮）
 
     /// 中文显示名（UI 用）
@@ -186,6 +188,8 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
         case .cool: return "冷调"
         case .mono: return "黑白"
         case .nostalgia: return "复古"
+        case .vintage: return "老相片"
+        case .fuji: return "富士"
         case .glam: return "妆照"
         }
     }
@@ -199,6 +203,8 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
         case .cool: return "❄️"
         case .mono: return "⚫️"
         case .nostalgia: return "📻"
+        case .vintage: return "🕰️"
+        case .fuji: return "🏔️"
         case .glam: return "💄"
         }
     }

@@ -383,6 +383,79 @@ public enum PipelineCore {
                 if f.inputKeys.contains("inputIntensity") { f.setValue(0.35, forKey: "inputIntensity") }
                 if f.inputKeys.contains("inputRadius") { f.setValue(1.2, forKey: "inputRadius") }
             }
+        case .vintage:
+            // 老相片：重褪色泛黄（深棕）+ 压对比 + 重暗角 + 胶片颗粒。
+            // 与 .nostalgia 的区别：sepia 更深、颗粒感、对比压得更死，更像翻拍的旧照。
+            chain("CISepiaTone") { f in
+                if f.inputKeys.contains("inputIntensity") { f.setValue(0.85, forKey: "inputIntensity") }
+            }
+            chain("CIColorControls") { f in
+                if f.inputKeys.contains("inputSaturation") { f.setValue(0.75, forKey: "inputSaturation") }
+                if f.inputKeys.contains(kCIInputContrastKey) { f.setValue(0.92, forKey: kCIInputContrastKey) }
+                if f.inputKeys.contains("inputBrightness") { f.setValue(0.02, forKey: "inputBrightness") }
+            }
+            chain("CIVignette") { f in
+                if f.inputKeys.contains("inputIntensity") { f.setValue(0.55, forKey: "inputIntensity") }
+                if f.inputKeys.contains("inputRadius") { f.setValue(1.5, forKey: "inputRadius") }
+            }
+            // 胶片颗粒：随机噪声 → 灰化 → 压低 alpha → 叠加，若隐若现的粗粰感
+            if let noise = CIFilter(name: "CIRandomGenerator"),
+               let noiseImg = noise.outputImage?.cropped(to: input.extent),
+               let gray = CIFilter(name: "CIColorControls"),
+               gray.inputKeys.contains(kCIInputImageKey), gray.inputKeys.contains("inputSaturation") {
+                gray.setValue(noiseImg, forKey: kCIInputImageKey)
+                gray.setValue(0.0, forKey: "inputSaturation")
+                if let grayImg = gray.outputImage,
+                   let matrix = CIFilter(name: "CIColorMatrix"),
+                   matrix.inputKeys.contains(kCIInputImageKey) {
+                    matrix.setValue(grayImg, forKey: kCIInputImageKey)
+                    // 只留 6% 透明度，避免颗粒淹没画面（Swift 的 CIVector 是 x/y/z/w 四元）
+                    matrix.setValue(CIVector(x: 0, y: 0, z: 0, w: 0.06), forKey: "inputAVector")
+                    if let grain = matrix.outputImage,
+                       let over = CIFilter(name: "CISourceOverCompositing"),
+                       over.inputKeys.contains(kCIInputImageKey) {
+                        over.setValue(grain, forKey: kCIInputImageKey)
+                        over.setValue(output, forKey: kCIInputBackgroundImageKey)
+                        if let blended = over.outputImage { output = blended }
+                    }
+                }
+            }
+        case .fuji:
+            // 富士胶片感：轻冷青调 + 低反差 + 微提黑（哑光）+ 低饱和 + 轻柔光空气感。
+            // tint 值必须极小（0.03），巨值会把整图打成纯黑（见 .warm 踩坑记录）。
+            chain("CITemperatureAndTint") { f in
+                if f.inputKeys.contains("inputNeutral") {
+                    f.setValue(CIVector(x: 6500, y: 0), forKey: "inputNeutral")
+                }
+                if f.inputKeys.contains("inputTargetNeutral") {
+                    f.setValue(CIVector(x: 6900, y: 0.03), forKey: "inputTargetNeutral")
+                }
+            }
+            chain("CIColorControls") { f in
+                if f.inputKeys.contains("inputSaturation") { f.setValue(0.88, forKey: "inputSaturation") }
+                if f.inputKeys.contains(kCIInputContrastKey) { f.setValue(0.95, forKey: kCIInputContrastKey) }
+                if f.inputKeys.contains("inputBrightness") { f.setValue(0.035, forKey: "inputBrightness") }
+            }
+            // 轻柔光：模糊副本先压暗 1.8 档再 screen 混合，得到富士特有的清透空气感
+            // （直接 screen 全亮模糊层会过曝，与 .glam 的做法刻意不同）
+            if let blur = CIFilter(name: "CIGaussianBlur"),
+               blur.inputKeys.contains(kCIInputImageKey) {
+                blur.setValue(output, forKey: kCIInputImageKey)
+                blur.setValue(8.0, forKey: "inputRadius")
+                if let blurred = blur.outputImage?.cropped(to: input.extent),
+                   let dim = CIFilter(name: "CIExposureAdjust"),
+                   dim.inputKeys.contains(kCIInputImageKey) {
+                    dim.setValue(blurred, forKey: kCIInputImageKey)
+                    dim.setValue(-1.8, forKey: kCIInputEVKey)
+                    if let dimmed = dim.outputImage,
+                       let screen = CIFilter(name: "CIScreenBlendMode"),
+                       screen.inputKeys.contains(kCIInputImageKey) {
+                        screen.setValue(dimmed, forKey: kCIInputImageKey)
+                        screen.setValue(output, forKey: kCIInputBackgroundImageKey)
+                        if let blended = screen.outputImage { output = blended }
+                    }
+                }
+            }
         case .glam:
             // 妆照风（第七档，借鉴商业软件 Glam）：磨皮加强 + 柔光 + 轻提亮
             chain("CIColorControls") { f in
