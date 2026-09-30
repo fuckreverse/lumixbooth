@@ -65,9 +65,10 @@ public struct ImagingService: ImagingServing {
         return f
     }()
 
-    public func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL) async throws -> ProcessedPhoto {
+    public func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL,
+                        filter: PhotoFilter? = nil) async throws -> ProcessedPhoto {
         let pipelineStart = CFAbsoluteTimeGetCurrent()
-        Log.imaging.info("修图管线开始: 模式=\(mode.kind.rawValue) 布局=\(mode.layout.rawValue) 输入=\(originals.count)张 目录=\(sessionDir.lastPathComponent)")
+        Log.imaging.info("修图管线开始: 模式=\(mode.kind.rawValue) 布局=\(mode.layout.rawValue) 滤镜覆盖=\(filter.map { $0.rawValue } ?? "配置默认") 输入=\(originals.count)张 目录=\(sessionDir.lastPathComponent)")
         guard !originals.isEmpty else {
             throw BoothError.imagingFailed("无输入原图")
         }
@@ -226,8 +227,10 @@ public struct ImagingService: ImagingServing {
         // MARK: ⑤c 滤镜 + ⑥ 边框/水印 + 输出（与 applyFilter 共用 finalize）
         // 拼版模式品牌条已含日期，右下角水印只在单张模式绘制
         let drawWatermark = conf.dateWatermark && mode.kind == .single
+        // 选片页携滤镜出片时覆盖配置默认滤镜（REVIEW 页仍可重打）
+        let effectiveFilter = filter ?? conf.defaultFilter
         let (printURL, displayURL) = try finalize(canvas: canvas,
-                                                  filter: conf.defaultFilter,
+                                                  filter: effectiveFilter,
                                                   conf: conf,
                                                   themeDir: themeDir,
                                                   accent: accent,
@@ -321,6 +324,29 @@ public struct ImagingService: ImagingServing {
         var updated = photo
         updated.printFile = qrURL
         return updated
+    }
+
+    // MARK: - 拍后选片预览图（连拍完成后选片页显示用）
+
+    /// 连拍原图 → 长边 480px 缩略 JPEG，落盘 sessionDir/shot-N.jpg。
+    /// 单张解码/缩放失败降级 nil（选片页该格显示占位图）；全部失败返回空数组。
+    public func writePreviews(originals: [CameraCapture], sessionDir: URL) async -> [URL?] {
+        guard !originals.isEmpty else { return [] }
+        try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        var urls: [URL?] = []
+        for (index, capture) in originals.enumerated() {
+            let url = sessionDir.appendingPathComponent("shot-\(index + 1).jpg")
+            do {
+                let img = try PipelineCore.decodeOriented(capture.data)
+                let small = try PipelineCore.scaledToLongEdge(img, 480)
+                try PipelineCore.writeJPEG(small, to: url, quality: 0.8, dpi: nil)
+                urls.append(url)
+            } catch {
+                Log.imaging.warn("选片预览生成失败(第\(index + 1)张): \(error.localizedDescription)")
+                urls.append(nil)
+            }
+        }
+        return urls
     }
 
     // MARK: - 内部共用

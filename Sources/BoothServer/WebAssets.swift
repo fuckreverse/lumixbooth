@@ -92,6 +92,23 @@ enum WebAssets {
           .filter-row { display:flex; gap:12px; margin-top:22px; justify-content:center; flex-wrap:wrap; }
           .filter-btn { background:#fff; border:3px solid #F3D9D2; color:var(--ink); border-radius:999px;
                         padding:12px 24px; font-size:19px; font-weight:600; cursor:pointer; }
+
+          /* SELECT 选片页：实时预览大图 + 缩略图 + 拼图样式 + 修图风格 */
+          .sel-wrap { display:flex; gap:16px; margin-top:18px; align-items:stretch; justify-content:center; flex:1; min-height:0; }
+          .sel-preview { flex:1 1 auto; max-width:52%; height:auto; max-height:100%; object-fit:contain;
+                         background:#fff; border-radius:16px; border:4px solid #fff; box-shadow:0 8px 22px rgba(91,74,79,.22); }
+          .sel-side { flex:0 0 40%; display:flex; flex-direction:column; gap:10px; min-height:0; justify-content:center; }
+          .sel-row { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+          .sel-thumb { width:76px; height:100px; object-fit:cover; border-radius:10px; border:3px solid #fff;
+                       box-shadow:0 4px 12px rgba(91,74,79,.16); cursor:pointer; transition:transform .15s, border-color .15s; }
+          .sel-thumb.on { border-color:var(--peach); transform:scale(1.07); box-shadow:0 6px 16px rgba(255,143,171,.5); }
+          .layout-row { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+          .layout-btn { background:#fff; border:3px solid #F3D9D2; color:var(--ink); border-radius:999px;
+                        padding:9px 15px; font-size:15px; font-weight:600; cursor:pointer; }
+          .layout-btn.on { background:var(--peach); color:#fff; border-color:var(--peach); }
+          .filter-btn.small { padding:8px 14px; font-size:14px; }
+          .filter-btn.small.on { border-color:var(--peach); color:var(--peach); box-shadow:0 6px 14px rgba(255,143,171,.35); }
+          .sel-hint { text-align:center; font-size:14px; opacity:.65; margin-top:2px; }
           .filter-btn.on { border-color:var(--peach); color:var(--peach);
                            box-shadow:0 8px 18px rgba(255,143,171,.35); }
 
@@ -121,6 +138,8 @@ enum WebAssets {
         <script>
         var ws = null, cur = null, copies = 2, modeKind = 'collage', takeTimer = null;
         var filters = null, curFilter = 'none', showPrint = true, showEmail = false, curPhotoId = null, emailDone = false;
+        var selLayouts = [], selShots = [], curLayout = 'strip', selDefault = 'strip', selPick = -1;
+        var selFilters = [], selFilter = 'none';
 
         var dot     = document.getElementById('dot');
         var stage   = document.getElementById('stage');
@@ -171,6 +190,15 @@ enum WebAssets {
 
           if (s === 'countdown') {
             stage.innerHTML = '<div class="countdown">' + (m.secondsLeft || 0) + '</div>';
+            return;
+          }
+          if (s === 'select' && m.shots) {
+            selLayouts = m.layouts || [];
+            selDefault = m.defaultLayout || 'strip';
+            selShots = m.shots;
+            selFilters = m.filters || [];
+            curLayout = selDefault; selPick = -1; selFilter = 'none';
+            renderSelect();
             return;
           }
           if (s === 'review' && m.photoId) {
@@ -280,6 +308,101 @@ enum WebAssets {
           }
         }
 
+        // SELECT 选片页：左实时预览大图 + 右（缩略图/拼图样式/修图风格/确认）
+        function renderSelect() {
+          var thumbs = selShots.map(function (sh) {
+            return '<img class="sel-thumb' + (sh.i === selPick ? ' on' : '') +
+              '" data-shot="' + sh.i + '" src="/photo/' + sh.id + '?t=' + Date.now() + '" alt="第' + (sh.i + 1) + '张">';
+          }).join('');
+          var layoutRow = selLayouts.length
+            ? '<div class="layout-row">' + selLayouts.map(function (l) {
+                return '<button class="layout-btn' + (l.id === curLayout && selPick < 0 ? ' on' : '') +
+                  '" data-layout="' + l.id + '">' + l.name + '</button>';
+              }).join('') + '</div>'
+            : '';
+          var filterRow = selFilters.length
+            ? '<div class="filter-row">' + selFilters.map(function (f) {
+                return '<button class="filter-btn small' + (f.id === selFilter ? ' on' : '') +
+                  '" data-selfilter="' + f.id + '">' + f.name + '</button>';
+              }).join('') + '</div>'
+            : '';
+          var goText = selPick >= 0 ? '就选这张 💖' : '就选这些 💖';
+          stage.innerHTML =
+            '<div class="sel-wrap">' +
+            '<img class="sel-preview" id="sel-preview" alt="实时预览">' +
+            '<div class="sel-side">' +
+            '<div class="sel-row">' + thumbs + '</div>' +
+            '<div class="sel-hint">点缩略图只出那一张，再点取消</div>' +
+            layoutRow +
+            filterRow +
+            '<div class="controls">' +
+            '<button class="btn btn-ghost" id="btn-sel-retake">重拍 🔄</button>' +
+            '<button class="btn btn-peach" id="btn-sel-go">' + goText + '</button>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
+          refreshSelPreview();
+        }
+        
+        // 实时预览：服务端 /selectpreview 合成（布局/单张/滤镜任一变化刷新）
+        var selPreviewSeq = 0;
+        function refreshSelPreview() {
+          var img = document.getElementById('sel-preview');
+          if (!img) return;
+          var ids = selShots.map(function (sh) { return sh.id; }).join(',');
+          var q = 'ids=' + ids + '&layout=' + curLayout +
+            (selPick >= 0 ? '&single=' + selPick : '') + '&filter=' + selFilter;
+          var seq = ++selPreviewSeq;
+          var probe = new Image();
+          probe.onload = function () {
+            if (seq !== selPreviewSeq) return;   // 过期结果丢弃
+            img.src = probe.src;
+          };
+          probe.src = '/selectpreview?' + q + '&t=' + Date.now();
+        }
+        function pickShot(i) {
+          selPick = (selPick === i) ? -1 : i;   // 再点一次取消
+          syncSelectUI();
+          refreshSelPreview();
+        }
+        function pickLayout(id) {
+          curLayout = id;
+          selPick = -1;   // 换样式则回到整版模式
+          syncSelectUI();
+          refreshSelPreview();
+        }
+        function pickSelFilter(id) {
+          selFilter = id;
+          syncSelectUI();
+          refreshSelPreview();
+        }
+        function syncSelectUI() {
+          var thumbs = stage.querySelectorAll('.sel-thumb');
+          for (var k = 0; k < thumbs.length; k++) {
+            thumbs[k].classList.toggle('on', parseInt(thumbs[k].dataset.shot, 10) === selPick);
+          }
+          var btns = stage.querySelectorAll('.layout-btn');
+          for (var k2 = 0; k2 < btns.length; k2++) {
+            btns[k2].classList.toggle('on', btns[k2].dataset.layout === curLayout && selPick < 0);
+          }
+          var fbtns = stage.querySelectorAll('.filter-btn.small');
+          for (var k3 = 0; k3 < fbtns.length; k3++) {
+            fbtns[k3].classList.toggle('on', fbtns[k3].dataset.selfilter === selFilter);
+          }
+          var go = document.getElementById('btn-sel-go');
+          if (go) go.textContent = selPick >= 0 ? '就选这张 💖' : '就选这些 💖';
+        }
+        function confirmSelection() {
+          var payload = {
+            type: 'selectOutput',
+            kind: selPick >= 0 ? 'single' : 'collage',
+            layout: curLayout,
+            indexes: selPick >= 0 ? [selPick] : [],
+            filter: selFilter
+          };
+          send(payload);
+        }
+
         // 打印完成后：请取照片（8s 后自动回待机）
         function renderTakePhoto() {
           cur = 'takephoto';
@@ -296,9 +419,15 @@ enum WebAssets {
         // ---------- 事件委托（stage 内容每次重建，统一在这里接点击） ----------
         stage.addEventListener('click', function (ev) {
           var b = ev.target.closest('button');
+          var th = ev.target.closest('.sel-thumb');
+          if (th) { pickShot(parseInt(th.dataset.shot, 10)); return; }
+          if (b && b.dataset.layout) { pickLayout(b.dataset.layout); return; }
+          if (b && b.dataset.selfilter) { pickSelFilter(b.dataset.selfilter); return; }
           if (!b) return;
           if (b.dataset.kind) { pickMode(b.dataset.kind); return; }
           if (b.dataset.filter) { pickFilter(b.dataset.filter); return; }
+          if (b.id === 'btn-sel-go') { confirmSelection(); return; }
+          if (b.id === 'btn-sel-retake') { send({ type: 'retake' }); }
           if (b.id === 'cop-minus') { copies = Math.max(1, copies - 1); }
           if (b.id === 'cop-plus')  { copies = Math.min(4, copies + 1); }
           if (b.id === 'cop-minus' || b.id === 'cop-plus') {

@@ -93,30 +93,56 @@ struct OpSettingsTab: View {
 
                 HStack {
                     label("默认模式")
-                    // 整模式替换（单张 shots=1 / 拼版 shots=4），避免只改 kind 留下不一致
+                    // 整模式替换（单张 shots=1 / 拼版 shots=4）；切到拼版时保留已选布局，
+                    // 拼版张数跟随布局推荐值（四宫格/主图三拼=4、双格=2、三格=3）
                     BoothSegmented([
-                        .init(ShootKind.single, "单张美照"), .init(ShootKind.collage, "四连拍拼版")
+                        .init(ShootKind.single, "单张美照"), .init(ShootKind.collage, "连拍拼版")
                     ], selection: Binding<ShootKind>(
                         get: { vm.config.capture.defaultMode.kind },
                         set: { kind in vm.update {
-                            $0.capture.defaultMode = kind == .single ? .single : .collage(4)
+                            if kind == .single {
+                                $0.capture.defaultMode = .single
+                            } else {
+                                let layout = $0.capture.defaultMode.layout
+                                $0.capture.defaultMode = .collage(layout.recommendedShots, layout: layout)
+                            }
                         } }))
                         .frame(width: controlWidth)
                 }
 
                 HStack {
                     label("拼版布局")
-                    // 拼版默认布局（经典拼条 / 四宫格 / 双格大图）
+                    // 拼版默认布局；切布局同时把连拍张数对齐到布局推荐值
                     BoothSegmented(
                         CollageLayout.allCases.map { .init($0, $0.displayName) },
                         selection: Binding<CollageLayout>(
                             get: { vm.config.capture.defaultMode.layout },
                             set: { layout in vm.update {
                                 if $0.capture.defaultMode.kind == .collage {
-                                    $0.capture.defaultMode = .collage($0.capture.defaultMode.shots, layout: layout)
+                                    $0.capture.defaultMode = .collage(layout.recommendedShots, layout: layout)
+                                } else {
+                                    $0.capture.defaultMode = .collage(layout.recommendedShots, layout: layout)
                                 }
                             } }))
                         .frame(width: controlWidth)
+                }
+
+                HStack {
+                    label("触发方式")
+                    BoothSegmented(TriggerStyle.allCases.map { .init($0, $0.displayName) },
+                                   selection: bind(\.capture.triggerStyle))
+                        .frame(width: controlWidth)
+                }
+
+                BoothToggle("拍后选片（连拍后挑一张或拼图样式）",
+                            isOn: bind(\.capture.layoutSelection))
+
+                HStack {
+                    label("选片超时")
+                    BoothStepper(value: bind(\.capture.selectTimeoutSec), in: 10...120, step: 5) {
+                        "\($0) 秒后按默认布局出片"
+                    }
+                    .frame(width: controlWidth)
                 }
 
                 BoothToggle("连拍不中断（拼版仅首张倒计时）",

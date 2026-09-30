@@ -85,12 +85,15 @@ public enum CollageLayout: String, Sendable, Codable, Equatable, CaseIterable {
     case strip    // 经典大头贴条：N 格纵列
     case grid2x2  // 2×2 四宫格
     case duo      // 双格大图（上下两格）
+    case trio     // 三格纵列
+    case onePlusThree  // 主图在上 + 三小图横排在下
 
-    /// 布局网格（列数 × 行数）；strip 行数随张数自适应
+    /// 布局网格（列数 × 行数）；strip/trio 行数随张数自适应
     public var columns: Int {
         switch self {
-        case .strip, .duo: return 1
+        case .strip, .duo, .trio: return 1
         case .grid2x2: return 2
+        case .onePlusThree: return 3   // 下排三小图列数（主图满宽）
         }
     }
 
@@ -100,6 +103,19 @@ public enum CollageLayout: String, Sendable, Codable, Equatable, CaseIterable {
         case .strip: return 4
         case .grid2x2: return 4
         case .duo: return 2
+        case .trio: return 3
+        case .onePlusThree: return 4
+        }
+    }
+
+    /// 拍后选片时该布局需要选几张（nil = 全部连拍张数都上）
+    public var requiredShots: Int? {
+        switch self {
+        case .strip: return nil
+        case .grid2x2: return 4
+        case .duo: return 2
+        case .trio: return 3
+        case .onePlusThree: return 4
         }
     }
 
@@ -109,6 +125,19 @@ public enum CollageLayout: String, Sendable, Codable, Equatable, CaseIterable {
         case .strip: return "经典拼条"
         case .grid2x2: return "四宫格"
         case .duo: return "双格大图"
+        case .trio: return "三格拼条"
+        case .onePlusThree: return "主图三拼"
+        }
+    }
+
+    /// 布局图标 emoji（UI 用）
+    public var emoji: String {
+        switch self {
+        case .strip: return "🎞️"
+        case .grid2x2: return "🔲"
+        case .duo: return "📐"
+        case .trio: return "📊"
+        case .onePlusThree: return "🏔️"
         }
     }
 }
@@ -198,6 +227,24 @@ public struct ProcessedPhoto: Sendable, Equatable {
     }
 }
 
+/// 拍后选片数据（连拍完成后让宾客挑一张或挑拼图样式）
+public struct ShotSelection: Sendable, Equatable {
+    /// 本次会话目录（拍后重拍/取消用）
+    public var sessionDir: URL
+    /// 连拍张缩略预览（与连拍张一一对应；生成失败时该张缺失）
+    public var previews: [URL?]
+    /// 预览图下载 id（与 previews 对齐；iPad 网页用 /photo/{id} 拉图）
+    public var previewIDs: [UUID?]
+    /// 超时回退的默认布局
+    public var defaultLayout: CollageLayout
+    public init(sessionDir: URL, previews: [URL?], previewIDs: [UUID?], defaultLayout: CollageLayout) {
+        self.sessionDir = sessionDir
+        self.previews = previews
+        self.previewIDs = previewIDs
+        self.defaultLayout = defaultLayout
+    }
+}
+
 /// 拍照流程状态机（SPEC §3），Equatable 便于单测断言
 public enum BoothState: Sendable, Equatable {
     case idle                              // 待机吸引页
@@ -205,10 +252,41 @@ public enum BoothState: Sendable, Equatable {
     case gestureWait                       // 等待手势触发
     case countdown(secondsLeft: Int)       // 倒计时
     case capturing(shot: Int, of: Int)     // 快门+下载中
+    case select(ShotSelection)             // 连拍完成，选片/选拼图样式
     case processing                        // 修图合成中
     case review(ProcessedPhoto)            // iPad/大屏确认
     case printing(copies: Int)             // 打印中
     case failure(String)                   // 可恢复错误（自动回 idle）
+}
+
+// MARK: - 触发方式（拍照前快速设置）
+
+/// 拍照触发方式：手势拍照 = 姿势就绪后比手势/挥手开拍；
+/// 倒计时拍照 = 姿势就绪后直接进倒计时（无需比手势）。
+/// rawValue 为英文 id（配置持久化用），中文标签走 displayName。
+public enum TriggerStyle: String, Sendable, Codable, Equatable, CaseIterable {
+    case gesture
+    case countdown
+
+    public var displayName: String {
+        switch self {
+        case .gesture: return "手势拍照"
+        case .countdown: return "倒计时拍照"
+        }
+    }
+
+    public var emoji: String {
+        switch self {
+        case .gesture: return "✌️"
+        case .countdown: return "⏱️"
+        }
+    }
+
+    /// 未知字符串安全解析（老配置容错）
+    public static func parse(_ raw: String?) -> TriggerStyle {
+        guard let raw else { return .gesture }
+        return TriggerStyle(rawValue: raw) ?? .gesture
+    }
 }
 
 // MARK: - 手势与姿势

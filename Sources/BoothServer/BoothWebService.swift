@@ -131,6 +131,11 @@ final class ClientSession {
     init(conn: NWConnection) { self.conn = conn }
 }
 
+/// 选片页实时预览合成器（BoothApp 注入 ImagingKit 实现，免依赖倒挂）：
+/// 输入预览图 URL 列表（选片序）+ 布局 + 单张序号 + 滤镜 → 合成 JPEG 预览图
+public typealias PreviewComposer = @Sendable (_ urls: [URL], _ layout: CollageLayout,
+                                              _ singleIndex: Int?, _ filter: PhotoFilter) async -> Data?
+
 public actor BoothWebService: BoothWebServing {
 
     private let conf: BoothConfig
@@ -152,10 +157,19 @@ public actor BoothWebService: BoothWebServing {
     /// 历史成片列表缓存（访问 /api/photos 时刷新；避免每次扫盘）
     private var historyCache: [HistoryPhoto]?
     private var historyCacheAt: Date?
+    /// 选片页实时预览合成器（BoothApp 组装时注入；未注入则 /selectpreview 返回 404）
+    private var previewComposer: PreviewComposer?
+    /// /selectpreview 结果缓存（同参数 60s 内直返，避免连点重复合成）
+    private var previewCache: [String: (data: Data, at: Date)] = [:]
 
     public init(conf: BoothConfig = BoothConfig(), health: HealthMonitor = .shared) {
         self.conf = conf
         self.health = health
+    }
+
+    /// 注入选片页预览合成器（BoothApp 组装时调用；ImagingKit 实现）
+    public func setPreviewComposer(_ composer: PreviewComposer?) {
+        previewComposer = composer
     }
 
     // MARK: - BoothWebServing 协议（同步要求 → nonisolated）
@@ -279,6 +293,16 @@ public actor BoothWebService: BoothWebServing {
             Log.server.info("注册成片+GIF 供下载: \(photo.id.uuidString) → boomerang.gif")
         } else {
             Log.server.info("注册成片供下载: \(photo.id.uuidString) → \(photo.displayFile.lastPathComponent)")
+        }
+    }
+
+    /// 拍后选片预览注册：与入参同序返回 id（nil=该张无预览），iPad 网页用 /photo/{id} 拉图
+    public func publishShots(_ urls: [URL?]) async -> [UUID?] {
+        urls.map { url in
+            guard let url else { return nil }
+            let id = UUID()
+            photos[id] = url
+            return id
         }
     }
 
@@ -438,6 +462,9 @@ public actor BoothWebService: BoothWebServing {
         case ("GET", let p) where p.hasPrefix("/photo/"):
             servePhoto(conn, String(p.dropFirst("/photo/".count)))
 
+        case ("GET", "/selectpreview"):
+            serveSelectPreview(conn, query: req.query ?? "")
+
         case ("GET", let p) where p.hasPrefix("/theme/icon/"):
             serveThemeIcon(conn, String(p.dropFirst("/theme/icon/".count)))
 
@@ -492,6 +519,50 @@ public actor BoothWebService: BoothWebServing {
         } catch {
             Log.server.error("读取照片文件失败 \(url.path): \(error)")
             send(conn, HTTPResponse.notFound(), thenCancel: true)
+        }
+    }
+
+    /// GET /selectpreview：选片页实时预览。
+    /// 参数：ids=<uuid>[,<uuid>...]（选片序）&layout=<rawValue>&single=<索引或空>&filter=<rawValue>
+    /// 由注入的 previewComposer（ImagingKit composePreview）合成 JPEG 返回。
+    private func serveSelectPreview(_ conn: NWConnection, query rawQuery: String) {
+        // 解析 query（值均为 ascii 安全字符，无需百分号解码）
+        var params: [String: String] = [:]
+        for pair in rawQuery.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2 else { continue }
+            params[String(kv[0])] = String(kv[1])
+        }
+        let ids = (params["ids"] ?? "").split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+        let layout = CollageLayout(rawValue: params["layout"] ?? "") ?? .strip
+        let single = params["single"].flatMap { Int($0) }
+        let filter = PhotoFilter.parse(params["filter"])
+        guard !ids.isEmpty, let composer = previewComposer else {
+            Log.server.warn("selectpreview 参数缺失或未注入合成器 → 404")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+            return
+        }
+        let urls = ids.compactMap { photos[$0] }
+        guard !urls.isEmpty else {
+            Log.server.warn("selectpreview 无已注册预览图 → 404")
+            send(conn, HTTPResponse.notFound(), thenCancel: true)
+            return
+        }
+        // 缓存命中直返（60s；同参数连点/重连不重复合成）
+        let cacheKey = "\(params["ids"] ?? "")|\(params["layout"] ?? "")|\(params["single"] ?? "")|\(params["filter"] ?? "none")"
+        if let hit = previewCache[cacheKey], Date().timeIntervalSince(hit.at) < 60 {
+            send(conn, HTTPResponse.ok(contentType: "image/jpeg", body: hit.data), thenCancel: true)
+            return
+        }
+        Task {
+            guard let data = await composer(urls, layout, single, filter) else {
+                send(conn, HTTPResponse.notFound(), thenCancel: true)
+                return
+            }
+            if previewCache.count > 64 { previewCache.removeAll() }   // 粗防膨胀
+            previewCache[cacheKey] = (data, Date())
+            send(conn, HTTPResponse.ok(contentType: "image/jpeg", body: data), thenCancel: true)
+            Log.server.info("选片预览合成 \(layout.rawValue) filter=\(filter.rawValue) single=\(single.map(String.init) ?? "整版")（\(data.count) 字节）")
         }
     }
 
@@ -811,6 +882,19 @@ public actor BoothWebService: BoothWebServing {
             Log.server.info("iPad 指令: 选择滤镜 \(filter.rawValue)")
             commandHub.yield(.selectFilter(filter))
 
+        case "selectOutput":
+            // SELECT 态选片确认：{"type":"selectOutput","kind":"single","layout":"grid2x2","indexes":[0,2],"filter":"vivid"}
+            let kind = (obj["kind"] as? String) == "single" ? ShootKind.single : ShootKind.collage
+            let layout = CollageLayout(rawValue: (obj["layout"] as? String) ?? "")
+                ?? conf.capture.defaultMode.layout
+            var indexes: [Int] = []
+            if let arr = obj["indexes"] as? [Any] {
+                indexes = arr.compactMap { $0 as? Int }
+            }
+            let filter = PhotoFilter.parse(obj["filter"] as? String)
+            Log.server.info("iPad 指令: 选片确认 kind=\(kind.rawValue) layout=\(layout.rawValue) filter=\(filter.rawValue) indexes=\(indexes)")
+            commandHub.yield(.selectOutput(kind: kind, layout: layout, indexes: indexes, filter: filter))
+
         case "email":
             // 邮箱采集：{"type":"email","email":"a@b.com","photoId":"uuid"}
             guard let email = obj["email"] as? String, !email.isEmpty else {
@@ -856,6 +940,18 @@ public actor BoothWebService: BoothWebServing {
             obj["state"] = "capturing"
             obj["shot"] = shot
             obj["of"] = of
+        case .select(let sel):
+            // 拍后选片：预览图列表 + 可选拼图样式 + 可选修图风格 + 默认布局
+            obj["state"] = "select"
+            obj["shots"] = sel.previewIDs.enumerated().compactMap { (i, id) in
+                id.map { ["i": i, "id": $0.uuidString] }
+            }
+            obj["layouts"] = CollageLayout.allCases.map { ["id": $0.rawValue, "name": $0.displayName] }
+            obj["defaultLayout"] = sel.defaultLayout.rawValue
+            obj["selectTimeout"] = conf.capture.selectTimeoutSec
+            if conf.imaging.filterSelection {
+                obj["filters"] = PhotoFilter.allCases.map { ["id": $0.rawValue, "name": $0.displayName] }
+            }
         case .processing:
             obj["state"] = "processing"
         case .review(let photo):

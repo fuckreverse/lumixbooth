@@ -53,6 +53,12 @@ final class GuestViewModel: ObservableObject {
     @Published private(set) var printKeyEnabled = true
     /// 大屏是否显示打印按钮（showPrintButton 开关；关闭时仅 iPad / P 键可打印）
     @Published private(set) var showPrintButton = true
+    /// SELECT 选片页是否显示拼图样式条（跟 layoutSelection 开关）
+    @Published private(set) var layoutSelectionShown = true
+    /// 当前选中的拼图样式（SELECT 态；初始为模式布局）
+    @Published private(set) var currentLayout: CollageLayout = .strip
+    /// 触发方式（大屏快捷胶囊切换，持久生效）
+    @Published private(set) var triggerStyle = TriggerStyle.gesture
     /// IDLE 背景历史成片轮播开关
     @Published private(set) var idleSlideshow = true
 
@@ -92,6 +98,9 @@ final class GuestViewModel: ObservableObject {
                 switch s {
                 case .idle, .armed, .gestureWait:
                     self.refreshModeAndCopies()
+                case .select(let sel):
+                    // 选片页初始选中样式 = 当前模式布局
+                    self.currentLayout = sel.defaultLayout
                 default:
                     break
                 }
@@ -131,6 +140,8 @@ final class GuestViewModel: ObservableObject {
             self.filterSelection = cfg.imaging.filterSelection
             self.printKeyEnabled = cfg.printing.printKeyEnabled
             self.showPrintButton = cfg.printing.showPrintButton
+            self.layoutSelectionShown = cfg.capture.layoutSelection
+            self.triggerStyle = cfg.capture.triggerStyle
             self.idleSlideshow = cfg.capture.idleSlideshow
             self.idleDimAfterMin = cfg.capture.idleDimAfterMin
             // 配置热更新后重估当前待机调暗状态
@@ -195,5 +206,27 @@ final class GuestViewModel: ObservableObject {
     func wakeFromDim() {
         resetIdleDim()
         Log.ui.info("省电调暗下触碰大屏，已揭罩回亮")
+    }
+
+    // MARK: - SELECT 态选片（拍后挑一张 / 挑拼图样式）
+
+    /// 选片页点拼图样式（只改选中高亮，出片时随指令提交）
+    func selectLayout(_ layout: CollageLayout) {
+        currentLayout = layout
+    }
+
+    /// 选片页确认出片：single 只出点选那张；collage 用当前选中样式；filter 为选片页预览所选修图风格
+    func confirmSelection(kind: ShootKind, indexes: [Int], filter: PhotoFilter = .none) {
+        Task { await coordinator.selectOutput(kind: kind, layout: currentLayout, indexes: indexes, filter: filter) }
+        Log.ui.info("选片确认: kind=\(kind.rawValue) layout=\(currentLayout.rawValue) filter=\(filter.rawValue) indexes=\(indexes)")
+    }
+
+    // MARK: - 触发方式快速切换（持久生效，免密）
+
+    func toggleTriggerStyle() {
+        let next: TriggerStyle = triggerStyle == .gesture ? .countdown : .gesture
+        triggerStyle = next   // 先本地切换，落盘以下次刷新为准
+        Task { await ConfigStore.shared.update { $0.capture.triggerStyle = next } }
+        Log.ui.info("触发方式切换为：\(next.displayName)")
     }
 }

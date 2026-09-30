@@ -13,7 +13,7 @@ import BoothCore
 // 每个算子只负责一步，失败抛错由上层决定降级策略。
 // ============================================================
 
-enum PipelineCore {
+public enum PipelineCore {
     /// 打印成片规格：6 寸竖版 1200×1800 @300dpi（SPEC §7）
     static let printSize = CGSize(width: 1200, height: 1800)
     /// 展示位图长边
@@ -150,7 +150,8 @@ enum PipelineCore {
     }
 
     /// 拼版模式：多布局排版成 1200×1800 大头贴（PhotoBoothProject 经典 collage 形态）。
-    /// 布局网格由 CollageLayout 决定：strip=N 格纵列（行数随张数）、grid2x2=2×2、duo=1×2。
+    /// 布局网格由 CollageLayout 决定：strip/trio=N 格纵列（行数随张数）、grid2x2=2×2、
+    /// duo=1×2、onePlusThree=主图满宽在上 + 三小图横排在下（张数不足自动降列）。
     /// 布局：四周 40px 白边，格间距 24px，底部 160px 品牌条（mascot + 日期 + Photobooth 字样），
     /// 品牌条与最后一格之间留 24px。
     static func composeCollage(photos: [CGImage],
@@ -168,19 +169,45 @@ enum PipelineCore {
         let outer: CGFloat = 40
         let gap: CGFloat = 24
         let brandH: CGFloat = 160
-        let cols = max(1, layout.columns)
-        let rows = layout == .strip ? n : max(1, (n + cols - 1) / cols)
-        let cellW = (canvas.width - outer * 2 - gap * CGFloat(cols - 1)) / CGFloat(cols)
-        let cellH = (canvas.height - outer * 2 - brandH - gap - gap * CGFloat(rows - 1)) / CGFloat(rows)
 
-        // CGContext 原点在左下角，自上而下、从左到右排格需换算 y
-        for (i, p) in photos.enumerated() {
-            let col = CGFloat(i % cols)
-            let row = CGFloat(i / cols)
-            let topFromTop = outer + row * (cellH + gap)
-            let x = outer + col * (cellW + gap)
-            let y = canvas.height - topFromTop - cellH
-            drawFill(p, in: CGRect(x: x, y: y, width: cellW, height: cellH), ctx: ctx)
+        // 各格目标矩形（原点左下坐标系）
+        let cells: [CGRect]
+        if layout == .onePlusThree {
+            // 主图三拼：主图满宽在上，其余张横排在下（张数不足自动减少小图列数）
+            let contentW = canvas.width - outer * 2
+            let contentH = canvas.height - outer * 2 - brandH - gap
+            let smallCount = max(0, n - 1)
+            let heroH = smallCount == 0 ? contentH : contentH * 0.58
+            let smallH = smallCount == 0 ? 0 : contentH - gap - heroH
+            var rects = [CGRect(x: outer, y: canvas.height - outer - heroH,
+                                width: contentW, height: heroH)]
+            if smallCount > 0 {
+                let smallW = (contentW - gap * CGFloat(smallCount - 1)) / CGFloat(smallCount)
+                for c in 0..<smallCount {
+                    let x = outer + CGFloat(c) * (smallW + gap)
+                    rects.append(CGRect(x: x, y: outer, width: smallW, height: smallH))
+                }
+            }
+            cells = rects
+        } else {
+            let cols = max(1, layout.columns)
+            let rows = layout == .strip ? n : max(1, (n + cols - 1) / cols)
+            let cellW = (canvas.width - outer * 2 - gap * CGFloat(cols - 1)) / CGFloat(cols)
+            let cellH = (canvas.height - outer * 2 - brandH - gap - gap * CGFloat(rows - 1)) / CGFloat(rows)
+            // CGContext 原点在左下角，自上而下、从左到右排格需换算 y
+            var rects: [CGRect] = []
+            for i in 0..<n {
+                let col = CGFloat(i % cols)
+                let row = CGFloat(i / cols)
+                let topFromTop = outer + row * (cellH + gap)
+                rects.append(CGRect(x: outer + col * (cellW + gap),
+                                    y: canvas.height - topFromTop - cellH,
+                                    width: cellW, height: cellH))
+            }
+            cells = rects
+        }
+        for (p, rect) in zip(photos, cells) {
+            drawFill(p, in: rect, ctx: ctx)
         }
 
         // 品牌条背景：主题 accent 色，无主题素材则浅灰兜底
@@ -223,6 +250,75 @@ enum PipelineCore {
         return try makeImage(from: ctx)
     }
 
+    /// 选片页实时预览：按所选输出合成一张小尺寸预览图（GuestSelectView / iPad 同用）。
+    /// - 单张：所选原图裁切填充 2:3；
+    /// - 拼版：全部原图按布局网格平铺（不画品牌条/边框，快速出图）；
+    /// - filter 非空时套对应风格滤镜，与最终出片一致。
+    /// 预期输入为 writePreviews 产出的 ~480px 小图，合成耗时毫秒级。
+    public static func composePreview(photos: [CGImage], layout: CollageLayout,
+                                      singleIndex: Int?, filter: PhotoFilter,
+                                      ctx: CIContext) throws -> CGImage {
+        guard let first = photos.first else {
+            throw BoothError.imagingFailed("预览无输入照片")
+        }
+        let previewW = 900, previewH = 1350   // 2:3，大屏/iPad 预览足够清晰
+        var canvas: CGImage
+
+        if let idx = singleIndex, photos.indices.contains(idx) {
+            // 单张：裁切填充 2:3
+            let target = CGSize(width: previewW, height: previewH)
+            let cg = makeBitmapContext(size: target)
+            drawFill(photos[idx], in: CGRect(origin: .zero, size: target), ctx: cg)
+            canvas = try makeImage(from: cg)
+        } else {
+            // 拼版：全部照片按布局平铺（无品牌条，纯格预览）
+            let n = max(1, photos.count)
+            let outer: CGFloat = 16, gap: CGFloat = 8
+            let cg = makeBitmapContext(size: CGSize(width: previewW, height: previewH))
+            cg.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            cg.fill(CGRect(x: 0, y: 0, width: previewW, height: previewH))
+            let contentW = CGFloat(previewW) - outer * 2
+            let contentH = CGFloat(previewH) - outer * 2
+            let cells: [CGRect]
+            if layout == .onePlusThree {
+                let smallCount = max(0, n - 1)
+                let heroH = smallCount == 0 ? contentH : contentH * 0.58
+                let smallH = smallCount == 0 ? 0 : contentH - gap - heroH
+                var rects = [CGRect(x: outer, y: CGFloat(previewH) - outer - heroH,
+                                    width: contentW, height: heroH)]
+                if smallCount > 0 {
+                    let smallW = (contentW - gap * CGFloat(smallCount - 1)) / CGFloat(smallCount)
+                    for c in 0..<smallCount {
+                        rects.append(CGRect(x: outer + CGFloat(c) * (smallW + gap), y: outer,
+                                            width: smallW, height: smallH))
+                    }
+                }
+                cells = rects
+            } else {
+                let cols = max(1, layout.columns)
+                let rows = layout == .strip ? n : max(1, (n + cols - 1) / cols)
+                let cellW = (contentW - gap * CGFloat(cols - 1)) / CGFloat(cols)
+                let cellH = (contentH - gap * CGFloat(rows - 1)) / CGFloat(rows)
+                var rects: [CGRect] = []
+                for i in 0..<n {
+                    let col = CGFloat(i % cols)
+                    let row = CGFloat(i / cols)
+                    let topFromTop = outer + row * (cellH + gap)
+                    rects.append(CGRect(x: outer + col * (cellW + gap),
+                                        y: CGFloat(previewH) - topFromTop - cellH,
+                                        width: cellW, height: cellH))
+                }
+                cells = rects
+            }
+            for (p, rect) in zip(photos, cells) {
+                drawFill(p, in: rect, ctx: cg)
+            }
+            canvas = try makeImage(from: cg)
+        }
+        // 套所选风格滤镜（.none 直返零拷贝）
+        return try applyStyleFilter(canvas, filter: filter, ctx: ctx)
+    }
+
     // MARK: - ⑤b 拍后自选滤镜（PhotoBoothProject 借鉴）
 
     /// 风格化滤镜：全部基于系统 CoreImage 滤镜链，无第三方依赖。
@@ -257,21 +353,26 @@ enum PipelineCore {
                 if f.inputKeys.contains(kCIInputAmountKey) { f.setValue(0.6, forKey: kCIInputAmountKey) }
             }
         case .warm:
+            // 暖阳：色温目标降至 4500K（红>蓝）。
+            // 踩坑记录：①新版 macOS 的 CITemperatureAndTint 键名是 inputTargetNeutral（旧名
+            // inputTarget 已不存在，静默跳过导致只剩 neutral 生效）；②tint 巨值（如 3000）
+            // 写入 neutral 会把整图打成纯黑，tint 必须保持 0 或极小值。
             chain("CITemperatureAndTint") { f in
                 if f.inputKeys.contains("inputNeutral") {
-                    f.setValue(CIVector(x: 6500, y: 3000), forKey: "inputNeutral")
+                    f.setValue(CIVector(x: 6500, y: 0), forKey: "inputNeutral")
                 }
-                if f.inputKeys.contains("inputTarget") {
-                    f.setValue(CIVector(x: 7800, y: 3100), forKey: "inputTarget")
+                if f.inputKeys.contains("inputTargetNeutral") {
+                    f.setValue(CIVector(x: 4500, y: 0), forKey: "inputTargetNeutral")
                 }
             }
         case .cool:
+            // 冷调：色温目标升至 8500K（蓝>红）
             chain("CITemperatureAndTint") { f in
                 if f.inputKeys.contains("inputNeutral") {
-                    f.setValue(CIVector(x: 6500, y: 3000), forKey: "inputNeutral")
+                    f.setValue(CIVector(x: 6500, y: 0), forKey: "inputNeutral")
                 }
-                if f.inputKeys.contains("inputTarget") {
-                    f.setValue(CIVector(x: 5200, y: 2900), forKey: "inputTarget")
+                if f.inputKeys.contains("inputTargetNeutral") {
+                    f.setValue(CIVector(x: 8500, y: 0), forKey: "inputTargetNeutral")
                 }
             }
         case .mono:

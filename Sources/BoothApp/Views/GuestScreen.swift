@@ -42,6 +42,8 @@ struct GuestScreen: View {
             GuestCountdownView(secondsLeft: n, store: vm.liveView)
         case .capturing(let shot, let total):
             GuestCapturingView(shot: shot, total: total, store: vm.liveView)
+        case .select(let selection):
+            GuestSelectView(selection: selection, vm: vm)
         case .processing:
             GuestProcessingView()
         case .review(let photo):

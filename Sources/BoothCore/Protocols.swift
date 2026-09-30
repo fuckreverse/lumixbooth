@@ -64,11 +64,15 @@ public protocol FaceLandmarking: Sendable {
 /// 调色美肤 → 人像分割换背景 → 边框/水印 → 单张或拼版 → 打印位图+展示位图。
 /// 要求：任一步失败降级跳过不阻断；产物写入 sessionDir 并返回 ProcessedPhoto。
 public protocol ImagingServing: Sendable {
-    func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL) async throws -> ProcessedPhoto
+    func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL,
+                 filter: PhotoFilter?) async throws -> ProcessedPhoto
     // 拍后重打 + QR 叠印：进协议本体才能动态派发到具体实现
     //（只在 extension 里给默认实现时，any 存在类型调用永远命中默认 no-op）
     func applyFilter(_ filter: PhotoFilter, to photo: ProcessedPhoto, sessionDir: URL) async throws -> ProcessedPhoto
     func overlayQR(content: String, on photo: ProcessedPhoto) async throws -> ProcessedPhoto
+    /// 拍后选片预览图：连拍原图缩到长边 ~480px 落盘 sessionDir/shot-N.jpg。
+    /// 单张失败降级返回 nil（选片页用占位图），整体失败返回空数组不阻断选片。
+    func writePreviews(originals: [CameraCapture], sessionDir: URL) async -> [URL?]
 }
 
 // MARK: - 拍后重打默认实现（协议扩展：不实现者免费获得降级行为）
@@ -87,6 +91,14 @@ public extension ImagingServing {
     /// 不支持时返回原成片。
     func overlayQR(content: String, on photo: ProcessedPhoto) async throws -> ProcessedPhoto {
         photo
+    }
+
+    /// 拍后选片预览图默认实现：逐张写原图降级版（无缩放，保证有图可选）
+    func writePreviews(originals: [CameraCapture], sessionDir: URL) async -> [URL?] {
+        originals.map { cap in
+            let url = sessionDir.appendingPathComponent("shot-\(UUID().uuidString).jpg")
+            return (try? cap.data.write(to: url, options: .atomic)) != nil ? url : nil
+        }
     }
 }
 
@@ -124,6 +136,8 @@ public protocol BoothWebServing: Sendable {
     func pushLiveViewFrame(_ jpeg: Data) async
     /// 注册成片供 /photo/{id} 下载
     func publishPhoto(_ photo: ProcessedPhoto) async
+    /// 注册拍后选片预览图（复用 /photo/{id} 路由），返回与入参同序对齐的 id（nil=该张无预览）
+    func publishShots(_ urls: [URL?]) async -> [UUID?]
 }
 
 public enum iPadCommand: Sendable, Equatable {
@@ -132,6 +146,9 @@ public enum iPadCommand: Sendable, Equatable {
     case selectMode(ShootMode)
     /// REVIEW 态选择滤镜（拍后自选滤镜）
     case selectFilter(PhotoFilter)
+    /// 拍后选片确认（连拍完成后的 SELECT 态，选单张/选拼图布局/选修图风格同页完成）：
+    /// kind=.single 时从连拍中挑一张直出；kind=.collage 时用所选拼图样式；filter 为选的修图风格
+    case selectOutput(kind: ShootKind, layout: CollageLayout, indexes: [Int], filter: PhotoFilter)
     /// 邮箱采集（线索采集）：宾客填邮箱领电子版，仅落盘不发送
     case submitEmail(email: String, photoID: UUID?)
     /// 操作员重打：/gallery 页验口令后的补打指令（date=日期目录名，session=会话目录名）

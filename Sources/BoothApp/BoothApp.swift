@@ -113,6 +113,26 @@ final class AppComposition: ObservableObject {
         coordRef.set(coordinator)
         Log.ui.info("模块[6/6] 状态机 = SessionCoordinator（全依赖注入完成）")
         Log.ui.info("═══ App 组装完成 ═══")
+
+        // 选片页实时预览合成器（iPad /selectpreview 调用；ImagingKit composePreview 毫秒级）
+        // 放在全部成员初始化完成后注入（闭包不捕获 self，独立 Task 挂到 server actor）
+        Task { await server.setPreviewComposer { urls, layout, singleIndex, filter in
+            let ctx = CIContext(options: [.cacheIntermediates: false])
+            var photos: [CGImage] = []
+            for url in urls {
+                if let img = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    photos.append(img)
+                }
+            }
+            guard let out = try? PipelineCore.composePreview(photos: photos, layout: layout,
+                                                             singleIndex: singleIndex, filter: filter, ctx: ctx)
+            else { return nil }
+            // JPEG 落内存（展示位图编码，质量足够网络传输）
+            let rep = NSBitmapImageRep(cgImage: out)
+            guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+            else { return nil }
+            return data
+        } }
     }
 
     /// 同步读配置快照（仅组装期用；运行期一律走 ConfigStore）

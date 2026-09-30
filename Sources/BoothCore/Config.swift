@@ -85,6 +85,11 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var idleCooldownAfterPrintSec = 0  // 打印完成回待机后自动 armed 冷却（秒；0=不冷却）
         // ---- 省电模式（借鉴商业软件“idle 保护”）：待机 N 分钟调暗大屏/暂停轮播 ----
         public var idleDimAfterMin = 10           // 0 = 不启用；>0 待机超过 N 分钟进入省电调暗
+        // ---- 拍照前快速设置：触发方式（大屏待机页快捷切换，持久生效）----
+        public var triggerStyle = TriggerStyle.gesture  // 手势拍照 / 倒计时拍照
+        // ---- 拍后选片（连拍完成后挑一张或挑拼图样式）----
+        public var layoutSelection = true         // 连拍后进入选片页（false = 直接按默认布局出片）
+        public var selectTimeoutSec = 30          // 选片页超时：按默认布局自动出片
         public init() {}
 
         // 向后兼容解码：老配置缺新字段 → 默认值，不丢已有设置
@@ -93,6 +98,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             case gestureTimeoutSec, armedTimeoutSec
             case continuousCollage, idleSlideshow, idleSlideshowSec
             case idleCooldownAfterPrintSec, idleDimAfterMin
+            case triggerStyle, layoutSelection, selectTimeoutSec
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -107,6 +113,9 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             idleSlideshowSec = try c.decodeIfPresent(Int.self, forKey: .idleSlideshowSec) ?? 6
             idleCooldownAfterPrintSec = try c.decodeIfPresent(Int.self, forKey: .idleCooldownAfterPrintSec) ?? 0
             idleDimAfterMin = try c.decodeIfPresent(Int.self, forKey: .idleDimAfterMin) ?? 10
+            triggerStyle = TriggerStyle.parse(try c.decodeIfPresent(String.self, forKey: .triggerStyle))
+            layoutSelection = try c.decodeIfPresent(Bool.self, forKey: .layoutSelection) ?? true
+            selectTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .selectTimeoutSec) ?? 30
         }
     }
 
@@ -301,6 +310,7 @@ extension BoothConfig {
         c.capture.idleSlideshowSec = c.capture.idleSlideshowSec.clamped(2...120)
         c.capture.idleCooldownAfterPrintSec = c.capture.idleCooldownAfterPrintSec.clamped(0...600)
         c.capture.idleDimAfterMin = c.capture.idleDimAfterMin.clamped(0...240)
+        c.capture.selectTimeoutSec = c.capture.selectTimeoutSec.clamped(5...300)
         // 提示音
         c.sounds.volume = c.sounds.volume.clamped(0...1)
         // 留言簿

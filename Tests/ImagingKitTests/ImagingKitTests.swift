@@ -323,6 +323,28 @@ final class ImagingKitTests: XCTestCase {
         XCTAssertEqual(none, source, "none 滤镜应原样返回")
     }
 
+    /// 暖阳/冷调回归（曾因旧键名 inputTarget 失效 + tint 巨值全黑）：
+    /// 输出不得全黑，且方向正确——暖调 R 相对 B 抬升，冷调 B 相对 R 抬升
+    func testWarmCoolFilterNotBlackAndDirection() throws {
+        let ctx = CIContext()
+        let source = try decodeJPEG(makeTestJPEG())
+        let region = (x: 600, y: 500, w: 300, h: 300)
+        let base = try averageRGB(source, x: region.x, y: region.y, w: region.w, h: region.h)
+        XCTAssertGreaterThan(base.r + base.g + base.b, 0.15, "测试图基线不应接近全黑")
+
+        let warm = try PipelineCore.applyStyleFilter(source, filter: .warm, ctx: ctx)
+        let w = try averageRGB(warm, x: region.x, y: region.y, w: region.w, h: region.h)
+        XCTAssertGreaterThan(w.r + w.g + w.b, 0.15, "暖阳不应输出全黑")
+        XCTAssertGreaterThan(w.r - w.b, base.r - base.b + 0.02,
+                             "暖阳应让红通道相对蓝通道抬升（R>B 方向）")
+
+        let cool = try PipelineCore.applyStyleFilter(source, filter: .cool, ctx: ctx)
+        let c = try averageRGB(cool, x: region.x, y: region.y, w: region.w, h: region.h)
+        XCTAssertGreaterThan(c.r + c.g + c.b, 0.15, "冷调不应输出全黑")
+        XCTAssertGreaterThan(c.b - c.r, base.b - base.r + 0.02,
+                             "冷调应让蓝通道相对红通道抬升（B>R 方向）")
+    }
+
     // MARK: - QR 叠印
 
     func testOverlayQRCode() throws {
@@ -344,7 +366,7 @@ final class ImagingKitTests: XCTestCase {
 
     // MARK: - 多拼版布局
 
-    /// 三种布局都产出 1200×1800，且 grid2x2/duo 与 strip 像素不同
+    /// 全部布局产出 1200×1800，且五种布局两两像素互不相同
     func testCollageLayouts() throws {
         let themeRoot = makeTempDir()
         let photos = try (1...4).map { _ in try decodeJPEG(makeTestJPEG(seed: Int.random(in: 0...99))) }
@@ -358,10 +380,68 @@ final class ImagingKitTests: XCTestCase {
             XCTAssertEqual(img.height, 1800, "\(layout.rawValue) 输出高应为 1800")
             outputs[layout] = img
         }
-        // 不同布局应产出不同像素（至少 strip vs grid2x2 vs duo 互不相同）
-        XCTAssertNotEqual(outputs[.strip], outputs[.grid2x2])
-        XCTAssertNotEqual(outputs[.strip], outputs[.duo])
-        XCTAssertNotEqual(outputs[.grid2x2], outputs[.duo])
+        // 五种布局两两互不相同（含新增 trio / onePlusThree）
+        XCTAssertEqual(CollageLayout.allCases.count, 5)
+        let keys = Array(outputs.keys)
+        for i in 0..<keys.count {
+            for j in (i + 1)..<keys.count {
+                XCTAssertNotEqual(outputs[keys[i]], outputs[keys[j]],
+                                  "\(keys[i].rawValue) 与 \(keys[j].rawValue) 不应输出相同像素")
+            }
+        }
+    }
+
+    /// 新增布局用各自推荐张数合成：三格拼条(3张) / 主图三拼(4张) 不崩、尺寸正确
+    func testCollageTrioAndOnePlusThree() throws {
+        let themeRoot = makeTempDir()
+        let dateText = "2026-09-30"
+
+        let trioPhotos = try (1...3).map { try decodeJPEG(makeTestJPEG(seed: $0)) }
+        let trio = try PipelineCore.composeCollage(photos: trioPhotos, layout: .trio,
+                                                    themeDir: themeRoot, accent: nil, dateText: dateText)
+        XCTAssertEqual(trio.width, 1200)
+        XCTAssertEqual(trio.height, 1800)
+
+        let quadPhotos = try (1...4).map { try decodeJPEG(makeTestJPEG(seed: $0 + 40)) }
+        let onePlusThree = try PipelineCore.composeCollage(photos: quadPhotos, layout: .onePlusThree,
+                                                            themeDir: themeRoot, accent: nil, dateText: dateText)
+        XCTAssertEqual(onePlusThree.width, 1200)
+        XCTAssertEqual(onePlusThree.height, 1800)
+
+        let grid = try PipelineCore.composeCollage(photos: quadPhotos, layout: .grid2x2,
+                                                   themeDir: themeRoot, accent: nil, dateText: dateText)
+        XCTAssertNotEqual(onePlusThree, grid, "主图三拼与四宫格不应输出相同像素")
+    }
+
+    /// 选片页实时预览：单张/整版 + 滤镜组合，输出 2:3 尺寸且互不相同
+    func testComposePreviewSingleCollageAndFilter() throws {
+        let ctx = CIContext()
+        let photos = try (1...4).map { try decodeJPEG(makeTestJPEG(seed: $0)) }
+
+        // 单张（第 2 张）与整版不应相同
+        let single = try PipelineCore.composePreview(photos: photos, layout: .grid2x2,
+                                                      singleIndex: 1, filter: .none, ctx: ctx)
+        XCTAssertEqual(single.width, 900)
+        XCTAssertEqual(single.height, 1350)
+
+        let collage = try PipelineCore.composePreview(photos: photos, layout: .grid2x2,
+                                                      singleIndex: nil, filter: .none, ctx: ctx)
+        XCTAssertEqual(collage.width, 900)
+        XCTAssertEqual(collage.height, 1350)
+        XCTAssertNotEqual(single, collage, "单张预览与整版预览不应相同")
+
+        // 换布局互不相同；换滤镜互不相同（实时预览区分度高）
+        let strip = try PipelineCore.composePreview(photos: photos, layout: .strip,
+                                                    singleIndex: nil, filter: .none, ctx: ctx)
+        XCTAssertNotEqual(collage, strip)
+        let warm = try PipelineCore.composePreview(photos: photos, layout: .grid2x2,
+                                                   singleIndex: nil, filter: .warm, ctx: ctx)
+        XCTAssertNotEqual(collage, warm, "选滤镜后预览应有变化")
+        // 滤镜预览不落黑（暖阳回归）
+        let warmRep = NSBitmapImageRep(cgImage: warm)
+        let c = warmRep.colorAt(x: 450, y: 200)!
+        XCTAssertGreaterThan(c.redComponent + c.greenComponent + c.blueComponent, 0.15,
+                              "暖阳预览不应全黑")
     }
 
     /// 端到端：collage 带布局参数跑通 process（grid2x2 两张）
@@ -380,6 +460,25 @@ final class ImagingKitTests: XCTestCase {
     private func decodeJPEG(_ data: Data) throws -> CGImage {
         let src = CGImageSourceCreateWithData(data as CFData, nil)!
         return try XCTUnwrap(CGImageSourceCreateImageAtIndex(src, 0, nil))
+    }
+
+    /// 采样区域平均 RGB（0~1）：画到 sRGB 上下文取三通道均值（暖阳/冷调方向断言用）
+    private func averageRGB(_ image: CGImage, x: Int, y: Int, w: Int, h: Int) throws -> (r: Double, g: Double, b: Double) {
+        let ctx = CGContext(
+            data: nil, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        ctx.draw(image, in: CGRect(x: -x, y: -y, width: image.width, height: image.height))
+        guard let dataPtr = ctx.data else { return (0, 0, 0) }
+        let buf = dataPtr.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        var r = 0.0, g = 0.0, b = 0.0
+        for i in 0..<(w * h) {
+            r += Double(buf[i * 4]); g += Double(buf[i * 4 + 1]); b += Double(buf[i * 4 + 2])
+        }
+        let n = Double(w * h)
+        return (r / n / 255.0, g / n / 255.0, b / n / 255.0)
     }
 
     /// 采样区域平均亮度（0~1）：把 image 指定偏移区域画到 80×80 灰度上下文取均值

@@ -36,10 +36,20 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(CollageLayout.strip.columns, 1)
         XCTAssertEqual(CollageLayout.grid2x2.columns, 2)
         XCTAssertEqual(CollageLayout.duo.columns, 1)
+        XCTAssertEqual(CollageLayout.trio.columns, 1)
+        XCTAssertEqual(CollageLayout.onePlusThree.columns, 3)
         XCTAssertEqual(CollageLayout.strip.recommendedShots, 4)
         XCTAssertEqual(CollageLayout.grid2x2.recommendedShots, 4)
         XCTAssertEqual(CollageLayout.duo.recommendedShots, 2)
-        XCTAssertEqual(CollageLayout.allCases.count, 3)
+        XCTAssertEqual(CollageLayout.trio.recommendedShots, 3)
+        XCTAssertEqual(CollageLayout.onePlusThree.recommendedShots, 4)
+        XCTAssertEqual(CollageLayout.allCases.count, 5)
+        // 拍后选片：新布局需选满张数，strip 全上
+        XCTAssertNil(CollageLayout.strip.requiredShots)
+        XCTAssertEqual(CollageLayout.grid2x2.requiredShots, 4)
+        XCTAssertEqual(CollageLayout.onePlusThree.requiredShots, 4)
+        XCTAssertEqual(CollageLayout.trio.requiredShots, 3)
+        XCTAssertEqual(CollageLayout.duo.requiredShots, 2)
     }
 
     func testPhotoFilterParse() {

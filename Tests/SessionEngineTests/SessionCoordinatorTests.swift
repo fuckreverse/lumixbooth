@@ -7,6 +7,7 @@ private func isReview(_ s: BoothState) -> Bool { if case .review = s { return tr
 private func isFailure(_ s: BoothState) -> Bool { if case .failure = s { return true }; return false }
 private func isCapturing(_ s: BoothState) -> Bool { if case .capturing = s { return true }; return false }
 private func isPrinting(_ s: BoothState) -> Bool { if case .printing = s { return true }; return false }
+private func isSelect(_ s: BoothState) -> Bool { if case .select = s { return true }; return false }
 
 // ============================================================
 // SessionCoordinator 状态机测试：
@@ -120,6 +121,7 @@ final class SessionCoordinatorTests: XCTestCase {
             c.capture.countdownSec = 1
             c.capture.defaultMode = .collage(4)
             c.capture.reviewTimeoutSec = 60
+            c.capture.layoutSelection = false   // 本测试验证不选片的直接出片路径
             c.vision.detectEveryNFrames = 1
             c.vision.readyFrames = 2
             c.vision.gestureHitFrames = 2
@@ -584,6 +586,7 @@ final class SessionCoordinatorTests: XCTestCase {
             c.capture.defaultMode = .collage(4)
             c.capture.continuousCollage = true
             c.capture.reviewTimeoutSec = 60
+            c.capture.layoutSelection = false   // 验证直接出片路径（连拍倒计时轮数不受选片影响）
         }
         let coord = makeSUT()
         await coord.begin()
@@ -735,5 +738,115 @@ final class SessionCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 400_000_000)
         let after = await EmailStore.shared.count
         XCTAssertEqual(after, before, "非法邮箱不应入库（不污染真实 emails.json）")
+    }
+
+    // MARK: - 拍后选片（SELECT）
+
+    /// 连拍完成进入 SELECT：预览已注册、尚未修图；只选一张（含去重/越界容错）→ single 直出
+    func testSelectSingleShotAfterCollage() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .collage(4)
+            c.capture.selectTimeoutSec = 300
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+
+        await expect("连拍完成应进入 select 态") { isSelect(await coord.state) }
+        await settle()
+        // 选片确认前不应修图/打印；iPad 端 shots 已注册
+        XCTAssertTrue(imaging.calls.isEmpty, "选片确认前不应修图")
+        XCTAssertEqual(server.publishedShots.count, 1)
+        XCTAssertEqual(server.publishedShots.first?.count, 4, "应注册 4 张选片预览")
+
+        // indexes 含重复和越界：应容错归一化为第 1 张；未选滤镜则 filter 为空
+        await coord.selectOutput(kind: .single, layout: .strip, indexes: [1, 1, 9], filter: .none)
+        await expect("选片确认后应进入 review") { isReview(await coord.state) }
+        XCTAssertEqual(imaging.calls.count, 1)
+        XCTAssertEqual(imaging.calls.first?.originals, 1, "只要一张时修图只收 1 张原片")
+        XCTAssertEqual(imaging.calls.first?.mode, .single)
+        XCTAssertNil(imaging.calls.first?.filter, "未选修图风格时不应带滤镜覆盖")
+        XCTAssertEqual(printer.submitted.count, 0)
+    }
+
+    /// 选片页改选拼图布局 + 挑其中两张：按所选布局和子集出片
+    func testSelectCollageLayoutAndSubset() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .collage(4, layout: .strip)
+            c.capture.selectTimeoutSec = 300
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应进入 select 态") { isSelect(await coord.state) }
+
+        await coord.selectOutput(kind: .collage, layout: .onePlusThree, indexes: [0, 2], filter: .warm)
+        await expect("选片确认后应进入 review") { isReview(await coord.state) }
+        XCTAssertEqual(imaging.calls.count, 1)
+        XCTAssertEqual(imaging.calls.first?.mode, .collage(2, layout: .onePlusThree))
+        XCTAssertEqual(imaging.calls.first?.originals, 2, "选中的两张应进入修图")
+        XCTAssertEqual(imaging.calls.first?.filter, .warm, "选片页所选修图风格应随指令出片")
+    }
+
+    /// 选片超时：不操作，按默认布局自动出片
+    func testSelectTimeoutFallsBackToDefaultLayout() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .collage(2, layout: .grid2x2)
+            c.capture.selectTimeoutSec = 5   // sanitized 下限
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        await coord.start()
+        await expect("应进入 select 态") { isSelect(await coord.state) }
+
+        // 不操作，等超时自动按默认布局出片
+        await expect("选片超时应按默认布局自动出片进 review", timeout: 20) { isReview(await coord.state) }
+        XCTAssertEqual(imaging.calls.count, 1)
+        XCTAssertEqual(imaging.calls.first?.mode, .collage(2, layout: .grid2x2))
+        XCTAssertEqual(imaging.calls.first?.originals, 2)
+    }
+
+    // MARK: - 触发方式（手势/倒计时）
+
+    /// 倒计时拍照模式：姿势就绪直接开拍，不经过 gestureWait
+    func testCountdownTriggerStyleSkipsGestureWait() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .collage(2)
+            c.capture.triggerStyle = .countdown
+            c.capture.layoutSelection = false
+            c.vision.detectEveryNFrames = 1
+            c.vision.readyFrames = 2
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        readiness.readiness = MockReadiness.ready()
+        for _ in 0..<8 { camera.pushFrame() }
+        await expect("姿势就绪应直接走完拍摄流程进 review") { isReview(await coord.state) }
+        await settle()
+        XCTAssertFalse(recorder.states.contains(.gestureWait), "倒计时模式不应进入 gestureWait")
+        XCTAssertTrue(recorder.states.contains(.countdown(secondsLeft: 1)))
+    }
+
+    /// setMode 布局保留：未显式携布局（strip 默认）不冲掉已选四宫格
+    func testSetModeKeepsNonStripLayout() async {
+        await configure { c in
+            c.capture.defaultMode = .collage(4, layout: .grid2x2)
+        }
+        let coord = makeSUT()
+        await coord.begin()   // begin() 从配置加载默认模式
+        var m = await coord.mode
+        XCTAssertEqual(m, .collage(4, layout: .grid2x2))
+
+        await coord.setMode(.collage(4))   // 未显式携布局（strip 默认）
+        m = await coord.mode
+        XCTAssertEqual(m, .collage(4, layout: .grid2x2), "切模式应保留当前非 strip 布局")
+
+        await coord.setMode(.single)
+        m = await coord.mode
+        XCTAssertEqual(m, .single)
     }
 }

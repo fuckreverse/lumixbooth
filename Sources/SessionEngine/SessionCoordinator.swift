@@ -42,6 +42,7 @@ public actor SessionCoordinator {
         case .gestureWait: return "gestureWait"
         case .countdown(let n): return "countdown(\(n))"
         case .capturing(let shot, let of): return "capturing(\(shot)/\(of))"
+        case .select: return "select"
         case .processing: return "processing"
         case .review: return "review"
         case .printing(let copies): return "printing(x\(copies))"
@@ -53,6 +54,8 @@ public actor SessionCoordinator {
     private var modeLoaded = false
     /// 当前生效滤镜（拍后自选；流程启动时重置为配置默认值）
     public private(set) var currentFilter: PhotoFilter = .none
+    /// SELECT 态暂存：连拍原图 + 会话目录 + 默认模式（超时回退用）
+    private var pendingSelection: (originals: [CameraCapture], sessionDir: URL, mode: ShootMode)?
 
     // MARK: - 可调延迟（测试加速用；nil = 跟随配置）
 
@@ -234,15 +237,49 @@ public actor SessionCoordinator {
         await transition(.idle, reason: "外部取消")
     }
 
-    /// 切换拍摄模式：待机/引导阶段合法，流程中记 warn 忽略
+    /// 切换拍摄模式：待机/引导阶段合法，流程中记 warn 忽略。
+    /// 模式为 collage 且未显式携布局时保留当前布局（防止 UI 默认 .strip 把四宫格冲掉）。
     public func setMode(_ newMode: ShootMode) async {
         switch state {
         case .idle, .armed, .gestureWait:
-            mode = newMode
-            Log.session.info("拍摄模式切换为 \(newMode.kind.rawValue)×\(newMode.shots)")
+            var m = newMode
+            if m.kind == .collage, mode.kind == .collage,
+               m.layout == .strip, mode.layout != .strip {
+                Log.session.info("模式切换保留当前布局 \(mode.layout.rawValue)")
+                m = ShootMode(kind: .collage, shots: m.shots, layout: mode.layout)
+            }
+            mode = m
+            Log.session.info("拍摄模式切换为 \(m.kind.rawValue)×\(m.shots) 布局=\(m.layout.rawValue)")
         default:
             Log.session.warn("当前态 \(describe(state)) 不允许切模式，已忽略")
         }
+    }
+
+    /// SELECT 态确认选片：kind=.single 从连拍中挑一张直出；
+    /// kind=.collage 用所选布局（indexes 空 = 全部连拍张）；filter 为选片页预览所选的修图风格
+    public func selectOutput(kind: ShootKind, layout: CollageLayout, indexes: [Int],
+                             filter: PhotoFilter = .none) async {
+        guard case .select = state, let pending = pendingSelection else {
+            Log.session.warn("当前态 \(describe(state)) 不允许选片确认，已忽略")
+            return
+        }
+        timeoutTask?.cancel(); timeoutTask = nil
+        pendingSelection = nil
+        // 归一化：去重排序、越界过滤；空 = 全部
+        var chosen = Array(Set(indexes)).filter { $0 >= 0 && $0 < pending.originals.count }.sorted()
+        if chosen.isEmpty { chosen = Array(pending.originals.indices) }
+        let picked = chosen.map { pending.originals[$0] }
+        let m: ShootMode
+        switch kind {
+        case .single:
+            m = .single
+        case .collage:
+            m = ShootMode(kind: .collage, shots: picked.count, layout: layout)
+        }
+        Log.session.info("选片确认: kind=\(kind.rawValue) layout=\(layout.rawValue) filter=\(filter.rawValue) 选用第 \(chosen) 张（共 \(pending.originals.count) 张）")
+        // .none = 未选修图风格（与 REVIEW 换滤镜语义对齐：none 走配置默认）
+        await finishFlow(originals: picked, sessionDir: pending.sessionDir, mode: m,
+                        cfg: await config.config, filterOverride: filter == .none ? nil : filter)
     }
 
     // MARK: - 帧消费（唯一消费者）
@@ -295,8 +332,13 @@ public actor SessionCoordinator {
                 if readyStreak >= cfg.vision.readyFrames {
                     readyStreak = 0
                     timeoutTask?.cancel(); timeoutTask = nil
-                    await transition(.gestureWait, reason: "姿势就绪（连续 \(cfg.vision.readyFrames) 帧）")
-                    startGestureTimeout(cfg)
+                    if cfg.capture.triggerStyle == .countdown {
+                        // 倒计时拍照模式：姿势就绪直接开拍（免手势）
+                        await beginShootFlow(reason: "姿势就绪（倒计时拍照模式）")
+                    } else {
+                        await transition(.gestureWait, reason: "姿势就绪（连续 \(cfg.vision.readyFrames) 帧）")
+                        startGestureTimeout(cfg)
+                    }
                 }
             } else {
                 readyStreak = 0
@@ -385,11 +427,53 @@ public actor SessionCoordinator {
             Log.session.info("第 \(shot)/\(shots) 张拍摄完成 \(cap.fileName)（\(cap.data.count)B）")
         }
 
+        // 拍后选片（连拍完成后挑一张或挑拼图样式；仅拼版模式且配置开启）
+        if m.kind == .collage, cfg.capture.layoutSelection, originals.count >= 2 {
+            await enterSelect(originals: originals, sessionDir: sessionDir, mode: m, cfg: cfg)
+            return
+        }
+        await finishFlow(originals: originals, sessionDir: sessionDir, mode: m, cfg: cfg)
+    }
+
+    /// 进入 SELECT 态：生成选片预览 + 注册下载 + 广播 + 超时自动按默认布局出片
+    private func enterSelect(originals: [CameraCapture], sessionDir: URL, mode m: ShootMode, cfg: BoothConfig) async {
+        let previews = await imaging.writePreviews(originals: originals, sessionDir: sessionDir)
+        pendingSelection = (originals: originals, sessionDir: sessionDir, mode: m)
+        // 预览图注册 /photo/{id}（iPad 页 <img> 直接用），与 previews 同序对齐
+        var previewIDs: [UUID?] = previews.map { _ in nil }
+        if let server {
+            previewIDs = await server.publishShots(previews)
+        }
+        let layout = m.layout
+        await transition(.select(ShotSelection(sessionDir: sessionDir, previews: previews,
+                                                previewIDs: previewIDs, defaultLayout: layout)),
+                         reason: "连拍完成，等待选片")
+        timeoutTask = Task {
+            let sec = Double(max(1, cfg.capture.selectTimeoutSec))
+            try? await Task.sleep(nanoseconds: UInt64(sec * 1_000_000_000))
+            guard !Task.isCancelled, case .select = state else { return }
+            Log.session.warn("选片超时（\(sec)s 无操作），按默认布局 \(layout.rawValue) 自动出片")
+            await selectOutput(kind: .collage, layout: layout, indexes: [])
+        }
+    }
+
+    /// 选片确认后的收尾：修图 → 广播成片 → REVIEW；filterOverride 携带选片页所选滤镜
+    private func finishFlow(originals: [CameraCapture], sessionDir: URL, mode m: ShootMode, cfg: BoothConfig,
+                            filterOverride: PhotoFilter? = nil) async {
+        guard !originals.isEmpty else {
+            await failAndRecover("无可用照片")
+            return
+        }
         await transition(.processing, reason: "全部拍摄完成（\(originals.count) 张），开始修图")
         do {
-            let photo = try await imaging.process(originals: originals, mode: m, sessionDir: sessionDir)
+            let photo = try await imaging.process(originals: originals, mode: m, sessionDir: sessionDir,
+                                                    filter: filterOverride)
             if let server { await server.publishPhoto(photo) } // 注册 /photo/{id} 供 QR 下载
             flowTask = nil // 流程主体结束，REVIEW 决策交由外部 API / 超时驱动
+            if let filterOverride, filterOverride != .none {
+                // 选片页已选风格：同步当前滤镜（REVIEW 选择条高亮一致，重选回 .none 仍可）
+                currentFilter = filterOverride
+            }
             await enterReview(photo, cfg: cfg)
         } catch {
             await failAndRecover("修图失败: \(describeError(error))")
@@ -493,8 +577,8 @@ public actor SessionCoordinator {
                     await resetToIdle("相机断开")
                 case .idle, .failure:
                     break // 已在待机/错误展示
-                case .review, .printing:
-                    break // 成片已拿到，相机断线不影响确认与打印
+                case .select, .review, .printing:
+                    break // 连拍已到手，选片/确认/打印不受相机断线影响
                 }
             case .connected:
                 Log.session.info("相机已连接/恢复，回待机待命")
@@ -538,6 +622,8 @@ public actor SessionCoordinator {
                 await setMode(m)
             case .selectFilter(let filter):
                 await selectFilter(filter)
+            case .selectOutput(let kind, let layout, let indexes, let filter):
+                await selectOutput(kind: kind, layout: layout, indexes: indexes, filter: filter)
             case .submitEmail(let email, let photoID):
                 // 邮箱采集：仅落盘不发送（EmailStore 负责校验/去重）
                 let ok = await EmailStore.shared.append(email: email, photoID: photoID?.uuidString)
@@ -648,6 +734,7 @@ public actor SessionCoordinator {
         case .gestureWait: return "gestureWait"
         case .countdown(let n): return "countdown(\(n))"
         case .capturing(let shot, let of): return "capturing(\(shot)/\(of))"
+        case .select: return "select"
         case .processing: return "processing"
         case .review(let p): return "review(\(p.id.uuidString.prefix(8)))"
         case .printing(let c): return "printing(\(c))"

@@ -128,6 +128,7 @@ final class MockImaging: ImagingServing, @unchecked Sendable {
         let originals: Int
         let mode: ShootMode
         let sessionDir: URL
+        let filter: PhotoFilter?   // 选片页携滤镜出片时非 nil
     }
 
     private let lock = NSLock()
@@ -151,8 +152,9 @@ final class MockImaging: ImagingServing, @unchecked Sendable {
     /// overlayQR 收到的链接序列（QR 叠印路径验证用）
     var qrCalls: [String] { lock.withLock { _qrCalls } }
 
-    func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL) async throws -> ProcessedPhoto {
-        lock.withLock { _calls.append(Call(originals: originals.count, mode: mode, sessionDir: sessionDir)) }
+    func process(originals: [CameraCapture], mode: ShootMode, sessionDir: URL,
+                 filter: PhotoFilter? = nil) async throws -> ProcessedPhoto {
+        lock.withLock { _calls.append(Call(originals: originals.count, mode: mode, sessionDir: sessionDir, filter: filter)) }
         if let e = error { throw e }
         return ProcessedPhoto(
             id: UUID(),
@@ -225,6 +227,8 @@ final class MockServer: BoothWebServing, @unchecked Sendable {
     private var _pushedFrameCount = 0
     private var _publishedPhotos: [ProcessedPhoto] = []
     private var _started = false
+    /// publishShots 调用记录（选片页用）
+    private var _publishedShots: [[URL?]] = []
 
     let port: UInt16 = 8080
 
@@ -241,6 +245,10 @@ final class MockServer: BoothWebServing, @unchecked Sendable {
     func broadcast(state: BoothState) async { lock.withLock { _broadcastStates.append(state) } }
     func pushLiveViewFrame(_ jpeg: Data) async { lock.withLock { _pushedFrameCount += 1 } }
     func publishPhoto(_ photo: ProcessedPhoto) async { lock.withLock { _publishedPhotos.append(photo) } }
+    func publishShots(_ urls: [URL?]) async -> [UUID?] {
+        lock.withLock { _publishedShots.append(urls) }
+        return urls.map { $0 != nil ? UUID() : nil }
+    }
 
     /// 测试注入一条 iPad 指令
     func send(_ command: iPadCommand) { commandCont.yield(command) }
@@ -248,6 +256,7 @@ final class MockServer: BoothWebServing, @unchecked Sendable {
     var broadcastStates: [BoothState] { lock.withLock { _broadcastStates } }
     var pushedFrameCount: Int { lock.withLock { _pushedFrameCount } }
     var publishedPhotos: [ProcessedPhoto] { lock.withLock { _publishedPhotos } }
+    var publishedShots: [[URL?]] { lock.withLock { _publishedShots } }
     var startedFlag: Bool { lock.withLock { _started } }
 }
 
