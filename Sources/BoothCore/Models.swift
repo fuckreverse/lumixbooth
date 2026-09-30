@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 // MARK: - 相机
 
@@ -292,6 +293,101 @@ public enum TriggerStyle: String, Sendable, Codable, Equatable, CaseIterable {
     public static func parse(_ raw: String?) -> TriggerStyle {
         guard let raw else { return .gesture }
         return TriggerStyle(rawValue: raw) ?? .gesture
+    }
+}
+
+// MARK: - 打印尺寸与打印质量（操作员设置页可配）
+
+/// 打印纸张尺寸。rawValue 为英文 id（配置持久化用），中文标签走 displayName。
+/// CUPS media 名称与毫米数由本枚举统一映射，paperWidthMM/paperHeightMM 遗留字段随尺寸同步。
+public enum PaperSize: String, Sendable, Codable, Equatable, CaseIterable {
+    case six      // 6 寸 4×6（默认，成片位图 1200×1800 @300dpi 的原生尺寸）
+    case five     // 5 寸 3.5×5
+    case seven    // 7 寸 5×7
+
+    public var displayName: String {
+        switch self {
+        case .six: return "6 寸"
+        case .five: return "5 寸"
+        case .seven: return "7 寸"
+        }
+    }
+
+    /// CUPS -o media= 参数值（无边距时由 cupsMedia(borderless:) 附加后缀）
+    public var cupsMediaName: String {
+        switch self {
+        case .six: return "4x6"
+        case .five: return "3.5x5"
+        case .seven: return "5x7"
+        }
+    }
+
+    /// 是否支持无边距输出（5 寸 3.5×5 在常见 EPSON 驱动上无 Borderless 变体）
+    public var supportsBorderless: Bool {
+        switch self {
+        case .six, .seven: return true
+        case .five: return false
+        }
+    }
+
+    /// 最终传给 lp 的 media 值：无边距开启且尺寸支持时用 Borderless 变体，否则降级普通值
+    public func cupsMedia(borderless: Bool) -> String {
+        borderless && supportsBorderless ? "\(cupsMediaName).Borderless" : cupsMediaName
+    }
+
+    /// 纸张物理毫米数（宽 × 高；用于同步遗留 paperWidthMM/paperHeightMM 字段）
+    public var sizeMM: (width: Double, height: Double) {
+        switch self {
+        case .six: return (101.6, 152.4)    // 4×6 英寸
+        case .five: return (88.9, 127.0)    // 3.5×5 英寸
+        case .seven: return (127.0, 177.8)  // 5×7 英寸
+        }
+    }
+
+    /// PDF 页面尺寸（点；PreviewPrintBackend 预览落 PDF 用，1pt = 1/72 英寸）
+    public var pdfPageSize: CGSize {
+        switch self {
+        case .six: return CGSize(width: 288, height: 432)
+        case .five: return CGSize(width: 252, height: 360)
+        case .seven: return CGSize(width: 360, height: 504)
+        }
+    }
+
+    /// 未知字符串安全解析（老配置容错：缺字段/坏值回默认 6 寸）
+    public static func parse(_ raw: String?) -> PaperSize {
+        guard let raw else { return .six }
+        return PaperSize(rawValue: raw) ?? .six
+    }
+}
+
+/// 打印质量。rawValue 为英文 id（配置持久化用），中文标签走 displayName。
+/// CUPS print-quality：3=草稿 4=标准 5=高质。
+public enum PrintQuality: String, Sendable, Codable, Equatable, CaseIterable {
+    case draft
+    case standard
+    case high
+
+    public var displayName: String {
+        switch self {
+        case .draft: return "草稿"
+        case .standard: return "标准"
+        case .high: return "高质"
+        }
+    }
+
+    /// CUPS -o print-quality= 参数值
+    public var cupsValue: Int {
+        switch self {
+        case .draft: return 3
+        case .standard: return 4
+        case .high: return 5
+        }
+    }
+
+    /// 未知字符串安全解析（老配置容错：缺字段/坏值回默认标准）
+    public static func parse(_ raw: String?) -> PrintQuality {
+        guard let raw else { return .standard }
+        return PrintQuality(rawValue: raw) ?? .standard
     }
 }
 

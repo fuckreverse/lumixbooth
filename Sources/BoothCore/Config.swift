@@ -75,7 +75,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var countdownSec = 3               // 3/5/10
         public var defaultMode = ShootMode.collage(4)
         public var reviewTimeoutSec = 60          // REVIEW 超时
-        public var autoPrintOnTimeout = true      // 超时自动打默认份数（false=只回待机）
+        public var autoPrintOnTimeout = false     // 超时自动打默认份数（默认关省相纸；false=只回待机，打印必须手动确认）
         public var gestureTimeoutSec = 30         // GESTURE 态超时回 idle
         public var armedTimeoutSec = 10           // ARMED 态人离开超时
         // ---- 新增（PhotoBoothProject 借鉴）----
@@ -105,7 +105,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             countdownSec = try c.decodeIfPresent(Int.self, forKey: .countdownSec) ?? 3
             defaultMode = try c.decodeIfPresent(ShootMode.self, forKey: .defaultMode) ?? .collage(4)
             reviewTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .reviewTimeoutSec) ?? 60
-            autoPrintOnTimeout = try c.decodeIfPresent(Bool.self, forKey: .autoPrintOnTimeout) ?? true
+            autoPrintOnTimeout = try c.decodeIfPresent(Bool.self, forKey: .autoPrintOnTimeout) ?? false
             gestureTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .gestureTimeoutSec) ?? 30
             armedTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .armedTimeoutSec) ?? 10
             continuousCollage = try c.decodeIfPresent(Bool.self, forKey: .continuousCollage) ?? false
@@ -193,9 +193,12 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var defaultCopies = 2
         public var minCopies = 1
         public var maxCopies = 4
-        public var paperWidthMM = 101.6           // 6 寸 4×6
+        // ---- 新增（操作员设置页：打印尺寸/打印质量）----
+        public var paperSize = PaperSize.six      // 6 寸 4×6（默认）
+        public var printQuality = PrintQuality.standard  // 标准（默认）
+        public var paperWidthMM = 101.6           // 遗留字段：随 paperSize 自动同步（sanitized）
         public var paperHeightMM = 152.4
-        public var borderless = true
+        public var borderless = true              // 无边距（5 寸不支持时自动降级有边距）
         public var dedupeWindowSec = 5            // 同一成片防连点窗口
         public var printQuotaPerHour = 0          // 每小时打印张数上限，0 = 不限制（防脚本刷打印）
         // ---- 新增（借鉴 PhotoBoothProject 打印设置粒度）----
@@ -210,6 +213,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         // 向后兼容解码：老配置缺新字段 → 默认值
         private enum CodingKeys: String, CodingKey {
             case printerName, defaultCopies, minCopies, maxCopies
+            case paperSize, printQuality
             case paperWidthMM, paperHeightMM, borderless, dedupeWindowSec, printQuotaPerHour
             case printQRCode, autoPrintDelaySec, printingDwellSec, printKeyEnabled, showPrintButton
             case dryRun
@@ -220,6 +224,8 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             defaultCopies = try c.decodeIfPresent(Int.self, forKey: .defaultCopies) ?? 2
             minCopies = try c.decodeIfPresent(Int.self, forKey: .minCopies) ?? 1
             maxCopies = try c.decodeIfPresent(Int.self, forKey: .maxCopies) ?? 4
+            paperSize = PaperSize.parse(try c.decodeIfPresent(String.self, forKey: .paperSize))
+            printQuality = PrintQuality.parse(try c.decodeIfPresent(String.self, forKey: .printQuality))
             paperWidthMM = try c.decodeIfPresent(Double.self, forKey: .paperWidthMM) ?? 101.6
             paperHeightMM = try c.decodeIfPresent(Double.self, forKey: .paperHeightMM) ?? 152.4
             borderless = try c.decodeIfPresent(Bool.self, forKey: .borderless) ?? true
@@ -327,6 +333,10 @@ extension BoothConfig {
         c.printing.printQuotaPerHour = c.printing.printQuotaPerHour.clamped(0...1000)
         c.printing.autoPrintDelaySec = c.printing.autoPrintDelaySec.clamped(0...120)
         c.printing.printingDwellSec = c.printing.printingDwellSec.clamped(0...60)
+        // 尺寸单一真源：毫米遗留字段随 paperSize 同步（老配置改过 mm 不再生效）
+        let mm = c.printing.paperSize.sizeMM
+        c.printing.paperWidthMM = mm.width
+        c.printing.paperHeightMM = mm.height
         // 拍摄/省电
         c.capture.idleSlideshowSec = c.capture.idleSlideshowSec.clamped(2...120)
         c.capture.idleCooldownAfterPrintSec = c.capture.idleCooldownAfterPrintSec.clamped(0...600)

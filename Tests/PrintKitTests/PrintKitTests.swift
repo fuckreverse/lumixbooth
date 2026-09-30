@@ -253,8 +253,9 @@ final class PrintKitTests: XCTestCase {
             "-n", "2",
             "-o", "media=4x6.Borderless",
             "-o", "fit-to-page",
+            "-o", "print-quality=4",
             "/tmp/x.jpg",
-        ], "无边距 + 指定打印机")
+        ], "无边距 6 寸 + 标准 + 指定打印机")
 
         config.printerName = ""      // 空 → 省略 -d 用系统默认
         config.borderless = false    // 有边距降级
@@ -263,8 +264,51 @@ final class PrintKitTests: XCTestCase {
             "-n", "4",
             "-o", "media=4x6",
             "-o", "fit-to-page",
+            "-o", "print-quality=4",
             "/tmp/x.jpg",
         ], "有边距 + 系统默认打印机（省略 -d）")
+    }
+
+    // MARK: - 7b. lp 参数随打印尺寸/质量映射（含 5 寸无边距降级）
+
+    func testLPArgumentsPaperSizeAndQuality() async {
+        // 5 寸无 Borderless 变体：borderless=true 也降级普通 media
+        var config = BoothConfig.PrintConf()
+        config.paperSize = .five
+        config.borderless = true
+        config.printQuality = .draft
+        let five = LPPrintBackend.lpArguments(imagePath: "/tmp/x.jpg", copies: 1, config: config)
+        XCTAssertTrue(five.contains("-o") && five.contains("media=3.5x5"),
+                      "5 寸无边距应降级普通 media: \(five)")
+        XCTAssertFalse(five.contains("media=3.5x5.Borderless"), "5 寸不应出现 Borderless 变体")
+        XCTAssertTrue(five.contains("print-quality=3"), "草稿质量应映射 3")
+
+        // 7 寸 + 高质 + 无边距
+        config.paperSize = .seven
+        config.printQuality = .high
+        let seven = LPPrintBackend.lpArguments(imagePath: "/tmp/x.jpg", copies: 1, config: config)
+        XCTAssertTrue(seven.contains("media=5x7.Borderless"), "7 寸无边距应用 Borderless 变体: \(seven)")
+        XCTAssertTrue(seven.contains("print-quality=5"), "高质应映射 5")
+    }
+
+    // MARK: - 7c. PrinterLister 解析（纯函数，不执行子进程）
+
+    func testPrinterListerParsesLpstatOutput() {
+        let output = """
+        printer EPSON_L805 is idle.  enabled since 2026-09-30 10:00:00
+        printer Canon_SELPHY is disabled since 2026-09-29 09:00:00 -
+        scheduler is running
+        """
+        let printers = PrinterLister.parsePrinters(output)
+        XCTAssertEqual(printers.count, 2, "scheduler 行应被忽略")
+        XCTAssertEqual(printers.first?.name, "EPSON_L805")
+        XCTAssertEqual(printers.first?.enabled, true)
+        XCTAssertEqual(printers.last?.name, "Canon_SELPHY")
+        XCTAssertEqual(printers.last?.enabled, false, "disabled 行应解析为未启用")
+
+        // 空输出/垃圾输入不崩
+        XCTAssertEqual(PrinterLister.parsePrinters(""), [])
+        XCTAssertEqual(PrinterLister.parsePrinters("garbage output\nnot a printer line"), [])
     }
 
     // MARK: - 8. 打印机不可用 → 任务失败而非崩溃

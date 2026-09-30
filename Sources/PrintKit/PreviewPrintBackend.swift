@@ -7,7 +7,7 @@ import BoothCore
 // 预览/PDF 打印后端（演示 dry-run，SPEC §12 无打印机降级路径）
 //  - 不触碰 CUPS/打印机：把打印位图包成 PDF 落到 print-preview/
 //  - 份数语义保留：copies=N → PDF 含 N 页相同内容
-//  - 页面尺寸 4×6 英寸（288×432pt），与 1200×1800 @300dpi 打印位图一致
+//  - 页面尺寸跟随打印尺寸配置 paperSize（pt = 英寸×72），与 lp 的 media 语义对齐
 //  - 可编程延迟模拟出片耗时；可选自动打开预览（默认关，演示大屏不打扰）
 // ============================================================
 
@@ -48,9 +48,10 @@ actor PreviewPrintBackend: PrintBackend {
         if delay > .zero {
             try await Task.sleep(for: delay)
         }
-        let pdfURL = try Self.renderPDF(imagePath: imagePath, copies: copies, to: outputDir)
+        let pdfURL = try Self.renderPDF(imagePath: imagePath, copies: copies, to: outputDir,
+                                         pageSize: config.paperSize.pdfPageSize)
         records.append(Record(imagePath: imagePath, pdfPath: pdfURL.path, copies: copies))
-        Log.print.info("[Preview] 已生成预览 PDF（\(copies) 页）: \(pdfURL.path)")
+        Log.print.info("[Preview] 已生成预览 PDF（尺寸 \(config.paperSize.displayName)、\(copies) 页）: \(pdfURL.path)")
         if autoOpen {
             Self.openInPreview(pdfURL)
         }
@@ -58,8 +59,9 @@ actor PreviewPrintBackend: PrintBackend {
 
     // MARK: - PDF 渲染
 
-    /// 把位图包成 N 页 PDF：页尺寸固定 4×6 英寸，图片满幅居中（无边距语义）
-    static func renderPDF(imagePath: String, copies: Int, to dir: URL) throws -> URL {
+    /// 把位图包成 N 页 PDF：页尺寸跟随配置的打印尺寸（pt），图片满幅居中（无边距语义）
+    static func renderPDF(imagePath: String, copies: Int, to dir: URL,
+                           pageSize: CGSize = PaperSize.six.pdfPageSize) throws -> URL {
         let srcURL = URL(fileURLWithPath: imagePath)
         guard let src = CGImageSourceCreateWithURL(srcURL as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
@@ -72,8 +74,8 @@ actor PreviewPrintBackend: PrintBackend {
         let base = srcURL.deletingPathExtension().lastPathComponent
         let pdfURL = dir.appendingPathComponent("\(stamp)-\(base).pdf")
 
-        // 6 寸相纸 = 4×6 英寸 = 288×432pt（PDF 点 = 1/72 英寸）
-        let pageRect = CGRect(x: 0, y: 0, width: 288, height: 432)
+        // 页尺寸跟随打印尺寸配置（PDF 点 = 1/72 英寸）
+        let pageRect = CGRect(origin: .zero, size: pageSize)
         guard let ctx = CGContext(pdfURL as CFURL, mediaBox: nil, nil) else {
             throw PrintBackendError.previewFailed("无法创建 PDF: \(pdfURL.path)")
         }

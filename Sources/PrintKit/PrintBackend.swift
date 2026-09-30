@@ -81,16 +81,18 @@ struct LPPrintBackend: PrintBackend {
     }
 
     /// 组装 lp 参数（独立成纯函数便于单测；不执行任何子进程）
-    /// -d 仅在配置了打印机名时出现（空 = 用系统默认）；media 按无边距开关二选一。
+    /// -d 仅在配置了打印机名时出现（空 = 用系统默认）；media 按打印尺寸映射
+    /// （无边距且尺寸支持时用 Borderless 变体，5 寸无 Borderless 自动降级）；
+    /// print-quality 按打印质量映射（3=草稿 4=标准 5=高质）。
     static func lpArguments(imagePath: String, copies: Int, config: BoothConfig.PrintConf) -> [String] {
         var args: [String] = []
         if !config.printerName.isEmpty {
             args += ["-d", config.printerName]
         }
         args += ["-n", String(copies)]
-        // 无边距用 4x6.Borderless；有边距降级 4x6（SPEC §12 风险 4 的降级路径）
-        args += ["-o", config.borderless ? "media=4x6.Borderless" : "media=4x6"]
+        args += ["-o", "media=\(config.paperSize.cupsMedia(borderless: config.borderless))"]
         args += ["-o", "fit-to-page"]
+        args += ["-o", "print-quality=\(config.printQuality.cupsValue)"]
         args.append(imagePath)
         return args
     }

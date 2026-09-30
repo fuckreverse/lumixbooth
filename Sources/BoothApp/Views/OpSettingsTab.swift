@@ -39,7 +39,10 @@ struct OpSettingsTab: View {
             }
             .padding(8)
         }
-        .onAppear { syncTextFields() }
+        .onAppear {
+            syncTextFields()
+            vm.refreshPrinters()   // 每次进设置页重枚举系统打印机（插拔/装驱动后保持新鲜）
+        }
         .onChange(of: vm.config) { _, _ in
             syncTextFields()
             vm.reloadBackups()   // 改动会自动备份，刷新列表
@@ -156,9 +159,6 @@ struct OpSettingsTab: View {
                     .frame(width: controlWidth)
                 }
 
-                BoothToggle("超时自动打印（关闭则只回待机）",
-                            isOn: bind(\.capture.autoPrintOnTimeout))
-
                 BoothToggle("待机屏历史成片轮播",
                             isOn: bind(\.capture.idleSlideshow))
 
@@ -179,6 +179,22 @@ struct OpSettingsTab: View {
         BoothCard {
             VStack(alignment: .leading, spacing: 16) {
                 cardTitle("打印设置", emoji: "🖨️")
+                printerPickerRow
+                HStack {
+                    label("打印尺寸")
+                    BoothSegmented(PaperSize.allCases.map { .init($0, $0.displayName) },
+                                   selection: bind(\.printing.paperSize))
+                        .frame(width: controlWidth)
+                    Text("无边距：\(vm.config.printing.borderless && vm.config.printing.paperSize.supportsBorderless ? "开" : "关")（5 寸不支持，自动降级有边距）")
+                        .font(theme.bodyFont(13))
+                        .foregroundStyle(theme.textSecondaryColor)
+                }
+                HStack {
+                    label("打印质量")
+                    BoothSegmented(PrintQuality.allCases.map { .init($0, $0.displayName) },
+                                   selection: bind(\.printing.printQuality))
+                        .frame(width: controlWidth)
+                }
                 HStack {
                     label("默认打印份数")
                     BoothStepper(value: bind(\.printing.defaultCopies), in: 1...4) {
@@ -186,6 +202,8 @@ struct OpSettingsTab: View {
                     }
                     .frame(width: controlWidth)
                 }
+                BoothToggle("REVIEW 超时自动打印（默认关：不手动确认不打印，省相纸）",
+                            isOn: bind(\.capture.autoPrintOnTimeout))
                 HStack {
                     label("每小时打印上限")
                     BoothStepper(value: Binding(
@@ -223,6 +241,11 @@ struct OpSettingsTab: View {
                     }
                     .frame(width: controlWidth)
                 }
+                BoothToggle("无边距打印",
+                            isOn: bind(\.printing.borderless))
+                Text("打印走后台串行队列：点打印后即可让下一位拍摄，任务依序出片，不阻塞流程")
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
                 BoothToggle("演示模式（不送打印机，输出 PDF 到预览目录）",
                             isOn: bind(\.printing.dryRun))
                 HStack {
@@ -234,6 +257,49 @@ struct OpSettingsTab: View {
                         .font(theme.bodyFont(14))
                         .foregroundStyle(theme.textSecondaryColor)
                 }
+            }
+        }
+    }
+
+    // MARK: - 打印机选择行（枚举 lpstat + 系统默认项）
+
+    private var printerPickerRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                label("指定打印机")
+                Menu {
+                    Button("系统默认打印机") {
+                        vm.update { $0.printing.printerName = "" }
+                    }
+                    Divider()
+                    ForEach(vm.printers) { p in
+                        Button("\(p.name)\(p.enabled ? "" : "（已停用）")") {
+                            vm.update { $0.printing.printerName = p.name }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(vm.config.printing.printerName.isEmpty
+                             ? "系统默认打印机" : vm.config.printing.printerName)
+                            .font(theme.bodyFont(17))
+                        Spacer()
+                        Text("▾")
+                            .font(theme.bodyFont(13))
+                            .foregroundStyle(theme.textSecondaryColor)
+                    }
+                    .foregroundStyle(theme.textColor)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: controlWidth)
+                BoothMiniButton(vm.printersRefreshing ? "枚举中…" : "刷新") {
+                    vm.refreshPrinters()
+                }
+                .disabled(vm.printersRefreshing)
+            }
+            if vm.printers.isEmpty {
+                Text("未检测到系统打印机——安装驱动后点「刷新」，或使用系统默认；设置只影响后续任务，队列中任务不变")
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
             }
         }
     }

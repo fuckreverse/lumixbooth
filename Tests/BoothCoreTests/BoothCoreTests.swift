@@ -110,6 +110,9 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(cfg.printing.printingDwellSec, 3)
         XCTAssertEqual(cfg.printing.printKeyEnabled, true)
         XCTAssertEqual(cfg.printing.showPrintButton, true)
+        // 打印尺寸/质量：旧配置缺字段回落默认（6 寸 / 标准）
+        XCTAssertEqual(cfg.printing.paperSize, .six, "旧配置缺 paperSize 应回退 6 寸")
+        XCTAssertEqual(cfg.printing.printQuality, .standard, "旧配置缺 printQuality 应回退标准")
         // 旧字段读取正常
         XCTAssertEqual(cfg.capture.countdownSec, 5)
         XCTAssertEqual(cfg.imaging.themeName, "party")
@@ -129,6 +132,9 @@ final class BoothCoreTests: XCTestCase {
         cfg.printing.printingDwellSec = 8
         cfg.printing.printKeyEnabled = false
         cfg.printing.showPrintButton = false
+        cfg.printing.paperSize = .seven
+        cfg.printing.printQuality = .high
+        cfg.printing.printerName = "EPSON_L805"
         cfg.vision.readyStableMs = 800
         cfg.vision.gestureStableMs = 200
         cfg.vision.absentStableMs = 600
@@ -138,6 +144,9 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(back.capture.defaultMode.layout, .grid2x2)
         XCTAssertEqual(back.imaging.defaultFilter, .nostalgia)
         XCTAssertEqual(back.printing.printingDwellSec, 8)
+        XCTAssertEqual(back.printing.paperSize, .seven, "打印尺寸应 round-trip")
+        XCTAssertEqual(back.printing.printQuality, .high, "打印质量应 round-trip")
+        XCTAssertEqual(back.printing.printerName, "EPSON_L805")
         XCTAssertEqual(back.vision.readyStableMs, 800)
         XCTAssertEqual(back.vision.gestureStableMs, 200)
         XCTAssertEqual(back.vision.absentStableMs, 600)
@@ -154,5 +163,39 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(conf.defaultCopies, 3)
         XCTAssertFalse(conf.borderless)
         XCTAssertFalse(conf.dryRun, "新增字段缺省回落默认值 false")
+        XCTAssertEqual(conf.paperSize, .six, "旧配置缺 paperSize 回退 6 寸")
+        XCTAssertEqual(conf.printQuality, .standard, "旧配置缺 printQuality 回退标准")
+    }
+
+    /// 新打印字段专项：默认值 / 坏值容错 / 毫米遗留字段随尺寸同步 / 默认不自动打印
+    func testPrintConfPaperSizeQualityAndDefaults() throws {
+        // 默认值：6 寸 + 标准 + 不自动打印（省相纸）
+        let def = BoothConfig.PrintConf()
+        XCTAssertEqual(def.paperSize, .six)
+        XCTAssertEqual(def.printQuality, .standard)
+        XCTAssertEqual(BoothConfig().capture.autoPrintOnTimeout, false,
+                     "REVIEW 超时自动打印默认应关闭")
+
+        // 坏值安全解析
+        XCTAssertEqual(PaperSize.parse("nope"), .six)
+        XCTAssertEqual(PaperSize.parse(nil), .six)
+        XCTAssertEqual(PrintQuality.parse("nope"), .standard)
+        XCTAssertEqual(PrintQuality.parse(nil), .standard)
+
+        // 枚举映射：CUPS media / 无边距降级 / 毫米 / PDF 页尺寸
+        XCTAssertEqual(PaperSize.six.cupsMedia(borderless: true), "4x6.Borderless")
+        XCTAssertEqual(PaperSize.six.cupsMedia(borderless: false), "4x6")
+        XCTAssertEqual(PaperSize.five.cupsMedia(borderless: true), "3.5x5", "5 寸无边距应降级")
+        XCTAssertEqual(PaperSize.seven.cupsMedia(borderless: true), "5x7.Borderless")
+        XCTAssertEqual(PrintQuality.draft.cupsValue, 3)
+        XCTAssertEqual(PrintQuality.standard.cupsValue, 4)
+        XCTAssertEqual(PrintQuality.high.cupsValue, 5)
+
+        // 净化后毫米遗留字段随 paperSize 同步（单一真源）
+        var cfg = BoothConfig()
+        cfg.printing.paperSize = .seven
+        let sanitized = cfg.sanitized()
+        XCTAssertEqual(sanitized.printing.paperWidthMM, 127.0, accuracy: 0.01)
+        XCTAssertEqual(sanitized.printing.paperHeightMM, 177.8, accuracy: 0.01)
     }
 }

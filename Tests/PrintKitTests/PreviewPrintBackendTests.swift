@@ -84,6 +84,25 @@ final class PreviewPrintBackendTests: XCTestCase {
         XCTAssertEqual(mediaBox?.height ?? 0, 432, accuracy: 0.5, "页高应为 6 英寸 = 432pt")
     }
 
+    // MARK: - 1b. PDF 页尺寸跟随打印尺寸配置（paperSize）
+
+    func testPreviewPDFPageSizeFollowsPaperSize() async throws {
+        let imageURL = try makeJPEG(name: "print-five.jpg")
+        let backend = PreviewPrintBackend(outputDir: tmpDir, delay: .zero)
+
+        var config = BoothConfig.PrintConf()
+        config.paperSize = .five
+        try await backend.print(imagePath: imageURL.path, copies: 1, config: config)
+
+        let records = await backend.records
+        let pdfPath = try XCTUnwrap(records.first?.pdfPath)
+        let doc = try XCTUnwrap(CGPDFDocument(URL(fileURLWithPath: pdfPath) as CFURL), "产物应是合法 PDF")
+        let mediaBox = doc.page(at: 1)?.getBoxRect(.mediaBox)
+        // 5 寸 3.5×5 英寸 = 252×360pt
+        XCTAssertEqual(mediaBox?.width ?? 0, 252, accuracy: 0.5, "页宽应为 3.5 英寸 = 252pt")
+        XCTAssertEqual(mediaBox?.height ?? 0, 360, accuracy: 0.5, "页高应为 5 英寸 = 360pt")
+    }
+
     // MARK: - 2. 源文件缺失 → fileNotFound
 
     func testPreviewMissingSourceThrows() async {

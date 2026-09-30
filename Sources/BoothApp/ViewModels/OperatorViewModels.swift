@@ -106,11 +106,15 @@ final class OpHealthViewModel: ObservableObject {
 // MARK: - 设置页
 
 /// 读写 ConfigStore（改动即存即生效）+ 配置备份管理（防呆：坏改动可反悔）
+/// + 系统打印机枚举（打印设置页「指定打印机」数据源）
 @MainActor
 final class OpSettingsViewModel: ObservableObject {
     @Published private(set) var config = BoothConfig()
     /// 配置备份列表（新→旧；每次改动自动备份，保留 10 份）
     @Published private(set) var backups: [ConfigBackup] = []
+    /// 系统打印机列表（lpstat 枚举；空 = 未检测到）
+    @Published private(set) var printers: [PrinterLister.Printer] = []
+    @Published private(set) var printersRefreshing = false
     private var task: Task<Void, Never>?
     private var started = false
 
@@ -124,6 +128,19 @@ final class OpSettingsViewModel: ObservableObject {
             }
         }
         reloadBackups()
+        refreshPrinters()
+    }
+
+    /// 枚举系统打印机（lpstat，后台线程；设置页出现/手动刷新时调用）
+    func refreshPrinters() {
+        guard !printersRefreshing else { return }
+        printersRefreshing = true
+        Task { [weak self] in
+            let list = await PrinterLister.listAsync()
+            guard let self else { return }
+            self.printers = list
+            self.printersRefreshing = false
+        }
     }
 
     /// 统一写入口（ConfigStore 改即存盘 + 广播热更新）

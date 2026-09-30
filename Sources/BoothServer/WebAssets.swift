@@ -217,12 +217,12 @@ enum WebAssets {
             gestureWait:['peace', '✌️', '比个耶，开始拍照！'],
             capturing:  ['camera', '📷', '拍摄中'],
             processing: ['sparkle', '✨', '正在修图'],
-            printing:   ['printer', '🖨️', '打印中，请稍候']
+            printing:   ['printer', '🖨️', '已加入打印队列']
           };
           if (map[s]) {
             var sub = '';
             if (s === 'capturing' && m.shot && m.of) sub = '第 ' + m.shot + ' / ' + m.of + ' 张';
-            if (s === 'printing' && m.copies)       sub = '共 ' + m.copies + ' 张';
+            if (s === 'printing' && m.copies)       sub = '正在为你打印 ' + m.copies + ' 张，可先让下一位开始拍照';
             stage.innerHTML =
               '<div class="big-emoji">' + ic(map[s][0], map[s][1]) + '</div>' +
               '<div class="big-text">' + map[s][2] + '</div>' +
