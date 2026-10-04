@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:lumixbooth}",
+            "name": "Debug booth",
+            "target": "booth",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug booth"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:lumixbooth}",
+            "name": "Release booth",
+            "target": "booth",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release booth"
+        }
+    ]
+}
