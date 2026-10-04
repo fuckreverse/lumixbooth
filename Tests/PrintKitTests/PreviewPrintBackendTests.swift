@@ -28,16 +28,18 @@ final class PreviewPrintBackendTests: XCTestCase {
     }
 
     /// 生成一张测试 JPEG（CoreGraphics 纯色填充）
-    private func makeJPEG(name: String = "print.jpg") throws -> URL {
+    private func makeJPEG(name: String = "print.jpg", landscape: Bool = false) throws -> URL {
         let url = tmpDir.appendingPathComponent(name)
+        let width = landscape ? 180 : 120
+        let height = landscape ? 120 : 180
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: 120, height: 180,
+              let ctx = CGContext(data: nil, width: width, height: height,
                                   bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                   bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
             throw NSError(domain: "test", code: 1)
         }
         ctx.setFillColor(CGColor(srgbRed: 0.8, green: 0.6, blue: 0.4, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: 120, height: 180))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let image = try XCTUnwrap(ctx.makeImage())
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, "public.jpeg" as CFString, 1, nil)
@@ -82,6 +84,15 @@ final class PreviewPrintBackendTests: XCTestCase {
         let mediaBox = doc.page(at: 1)?.getBoxRect(.mediaBox)
         XCTAssertEqual(mediaBox?.width ?? 0, 288, accuracy: 0.5, "页宽应为 4 英寸 = 288pt")
         XCTAssertEqual(mediaBox?.height ?? 0, 432, accuracy: 0.5, "页高应为 6 英寸 = 432pt")
+    }
+
+    func testLandscapeImageUsesLandscapePDFPage() throws {
+        let imageURL = try makeJPEG(name: "landscape.jpg", landscape: true)
+        let pdfURL = try PreviewPrintBackend.renderPDF(imagePath: imageURL.path, copies: 1, to: tmpDir)
+        let doc = try XCTUnwrap(CGPDFDocument(pdfURL as CFURL))
+        let mediaBox = doc.page(at: 1)?.getBoxRect(.mediaBox)
+        XCTAssertEqual(mediaBox?.width ?? 0, 432, accuracy: 0.5)
+        XCTAssertEqual(mediaBox?.height ?? 0, 288, accuracy: 0.5)
     }
 
     // MARK: - 1b. PDF 页尺寸跟随打印尺寸配置（paperSize）

@@ -118,8 +118,7 @@ final class ImagingKitTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.printFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.displayFile.path))
-        // 打印位图必须严格 1200×1800（6 寸竖版 @300dpi）
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
         // 展示位图长边 1600
         let displaySize = imageSize(result.displayFile)
         XCTAssertEqual(max(displaySize.width, displaySize.height), 1600)
@@ -135,13 +134,27 @@ final class ImagingKitTests: XCTestCase {
 
     // MARK: - 拼版模式
 
+    func testPortraitCaptureKeepsPortraitOutputAndPreview() async throws {
+        let sessionDir = makeTempDir()
+        let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
+        let jpeg = makeTestJPEG(width: 1280, height: 1920)
+        let capture = CameraCapture(handle: 1, data: jpeg, fileName: "portrait.jpg")
+        let result = try await service.process(originals: [capture], mode: .single, sessionDir: sessionDir)
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        let photo = try PipelineCore.decodeOriented(jpeg)
+        let preview = try PipelineCore.composePreview(photos: [photo], layout: .strip,
+                                                       singleIndex: 0, filter: .none, ctx: CIContext())
+        XCTAssertEqual(CGSize(width: preview.width, height: preview.height),
+                       CGSize(width: 900, height: 1350))
+    }
+
     func testCollageModeProduces6InchStrip() async throws {
         let sessionDir = makeTempDir()
         let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
         let captures = (1...4).map { makeCapture($0) }
         let result = try await service.process(originals: captures, mode: .collage(4), sessionDir: sessionDir)
 
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
         let displaySize = imageSize(result.displayFile)
         XCTAssertEqual(max(displaySize.width, displaySize.height), 1600)
         // 4 张原图全部落盘
@@ -156,7 +169,7 @@ final class ImagingKitTests: XCTestCase {
         let sessionDir = makeTempDir()
         let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
         let result = try await service.process(originals: [makeCapture(1)], mode: .single, sessionDir: sessionDir)
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// 配置全开但无主题素材、无 segmenter：全部降级跳过，产物仍生成
@@ -166,7 +179,7 @@ final class ImagingKitTests: XCTestCase {
         conf.replaceBackground = true   // 开了但没素材没 segmenter → 应降级
         let service = ImagingService(segmenter: nil, configOverride: conf, themesDirOverride: makeTempDir())
         let result = try await service.process(originals: [makeCapture(1)], mode: .single, sessionDir: sessionDir)
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// 主题素材齐全 + 全白 matte 假分割器：换背景/边框/水印全路径不崩
@@ -192,10 +205,10 @@ final class ImagingKitTests: XCTestCase {
 
         // 单张 + 拼版都走一遍换背景路径
         let single = try await service.process(originals: [makeCapture(1)], mode: .single, sessionDir: sessionDir)
-        XCTAssertEqual(imageSize(single.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(single.printFile), CGSize(width: 1800, height: 1200))
         let collageDir = makeTempDir()
         let collage = try await service.process(originals: (1...4).map { makeCapture($0) }, mode: .collage(4), sessionDir: collageDir)
-        XCTAssertEqual(imageSize(collage.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(collage.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// 分割器抛错：换背景降级保留原背景，管线不中断
@@ -211,7 +224,7 @@ final class ImagingKitTests: XCTestCase {
         conf.replaceBackground = true
         let service = ImagingService(segmenter: FailingSegmenter(), configOverride: conf, themesDirOverride: themeRoot)
         let result = try await service.process(originals: [makeCapture(1)], mode: .single, sessionDir: sessionDir)
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
     }
 
     // MARK: - 异常输入
@@ -236,7 +249,7 @@ final class ImagingKitTests: XCTestCase {
         let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
         let corrupt = CameraCapture(handle: 99, data: Data("not a jpeg".utf8), fileName: "BAD.JPG")
         let result = try await service.process(originals: [corrupt, makeCapture(1)], mode: .single, sessionDir: sessionDir)
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
         // 两张都落盘（落盘不因解码失败而跳过）
         XCTAssertEqual(result.originals.count, 2)
     }
@@ -286,13 +299,13 @@ final class ImagingKitTests: XCTestCase {
         XCTAssertNotEqual(vivid.id, original.id, "重打应生成新成片 id（iPad 端避缓存换图）")
         XCTAssertTrue(FileManager.default.fileExists(atPath: vivid.printFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: vivid.displayFile.path))
-        XCTAssertEqual(imageSize(vivid.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(vivid.printFile), CGSize(width: 1800, height: 1200))
         XCTAssertEqual(vivid.baseFile, base)
 
         // 再换一次滤镜仍然成功（base 可反复重打）
         let mono = try await service.applyFilter(.mono, to: vivid, sessionDir: sessionDir)
         XCTAssertNotEqual(mono.id, vivid.id)
-        XCTAssertEqual(imageSize(mono.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(mono.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// 旧会话无 print-base.jpg（baseFile=nil）：applyFilter 降级返回原成片
@@ -395,7 +408,7 @@ final class ImagingKitTests: XCTestCase {
 
     // MARK: - 多拼版布局
 
-    /// 全部布局产出 1200×1800，且五种布局两两像素互不相同
+    /// 横构图输入的全部布局产出 1800×1200，且五种布局两两像素互不相同
     func testCollageLayouts() throws {
         let themeRoot = makeTempDir()
         let photos = try (1...4).map { _ in try decodeJPEG(makeTestJPEG(seed: Int.random(in: 0...99))) }
@@ -405,8 +418,8 @@ final class ImagingKitTests: XCTestCase {
         for layout in CollageLayout.allCases {
             let img = try PipelineCore.composeCollage(photos: photos, layout: layout,
                                                       themeDir: themeRoot, accent: nil, dateText: dateText)
-            XCTAssertEqual(img.width, 1200, "\(layout.rawValue) 输出宽应为 1200")
-            XCTAssertEqual(img.height, 1800, "\(layout.rawValue) 输出高应为 1800")
+            XCTAssertEqual(img.width, 1800, "\(layout.rawValue) 输出宽应为 1800")
+            XCTAssertEqual(img.height, 1200, "\(layout.rawValue) 输出高应为 1200")
             outputs[layout] = img
         }
         // 五种布局两两互不相同（含新增 trio / onePlusThree）
@@ -428,14 +441,14 @@ final class ImagingKitTests: XCTestCase {
         let trioPhotos = try (1...3).map { try decodeJPEG(makeTestJPEG(seed: $0)) }
         let trio = try PipelineCore.composeCollage(photos: trioPhotos, layout: .trio,
                                                     themeDir: themeRoot, accent: nil, dateText: dateText)
-        XCTAssertEqual(trio.width, 1200)
-        XCTAssertEqual(trio.height, 1800)
+        XCTAssertEqual(trio.width, 1800)
+        XCTAssertEqual(trio.height, 1200)
 
         let quadPhotos = try (1...4).map { try decodeJPEG(makeTestJPEG(seed: $0 + 40)) }
         let onePlusThree = try PipelineCore.composeCollage(photos: quadPhotos, layout: .onePlusThree,
                                                             themeDir: themeRoot, accent: nil, dateText: dateText)
-        XCTAssertEqual(onePlusThree.width, 1200)
-        XCTAssertEqual(onePlusThree.height, 1800)
+        XCTAssertEqual(onePlusThree.width, 1800)
+        XCTAssertEqual(onePlusThree.height, 1200)
 
         let grid = try PipelineCore.composeCollage(photos: quadPhotos, layout: .grid2x2,
                                                    themeDir: themeRoot, accent: nil, dateText: dateText)
@@ -450,13 +463,13 @@ final class ImagingKitTests: XCTestCase {
         // 单张（第 2 张）与整版不应相同
         let single = try PipelineCore.composePreview(photos: photos, layout: .grid2x2,
                                                       singleIndex: 1, filter: .none, ctx: ctx)
-        XCTAssertEqual(single.width, 900)
-        XCTAssertEqual(single.height, 1350)
+        XCTAssertEqual(single.width, 1350)
+        XCTAssertEqual(single.height, 900)
 
         let collage = try PipelineCore.composePreview(photos: photos, layout: .grid2x2,
                                                       singleIndex: nil, filter: .none, ctx: ctx)
-        XCTAssertEqual(collage.width, 900)
-        XCTAssertEqual(collage.height, 1350)
+        XCTAssertEqual(collage.width, 1350)
+        XCTAssertEqual(collage.height, 900)
         XCTAssertNotEqual(single, collage, "单张预览与整版预览不应相同")
 
         // 换布局互不相同；换滤镜互不相同（实时预览区分度高）
@@ -479,7 +492,7 @@ final class ImagingKitTests: XCTestCase {
         let service = ImagingService(segmenter: nil, configOverride: allOffConfig, themesDirOverride: makeTempDir())
         let result = try await service.process(originals: [makeCapture(1), makeCapture(2)],
                                                 mode: .collage(2, layout: .duo), sessionDir: sessionDir)
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
         XCTAssertEqual(result.originals.count, 2)
     }
 

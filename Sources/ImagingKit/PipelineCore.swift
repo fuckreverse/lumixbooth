@@ -14,8 +14,11 @@ import BoothCore
 // ============================================================
 
 public enum PipelineCore {
-    /// 打印成片规格：6 寸竖版 1200×1800 @300dpi（SPEC §7）
+    /// 6 寸竖版基准尺寸；横版交换宽高。
     static let printSize = CGSize(width: 1200, height: 1800)
+    static func printSize(for photo: CGImage) -> CGSize {
+        photo.width > photo.height ? CGSize(width: 1800, height: 1200) : printSize
+    }
     /// 展示位图长边
     static let displayLongEdge = 1600
     /// 打印 JPEG 质量
@@ -138,18 +141,19 @@ public enum PipelineCore {
 
     // MARK: - ⑤ 排版输出
 
-    /// 单张模式：横构图照片（3:2）裁切填充竖版 6 寸（2:3）。
+    /// 单张模式：按转正后的照片方向裁切填充 6 寸画布。
     /// “智能居中裁切”：按覆盖缩放后取画面中心区域 —— 拍照亭场景人站画面中央，
     /// 中心裁切命中率最高；后续如接入人脸检测可在此微调裁切偏移。
     static func composeSingle(_ photo: CGImage) throws -> CGImage {
-        let ctx = makeBitmapContext(size: printSize)
+        let size = printSize(for: photo)
+        let ctx = makeBitmapContext(size: size)
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fill(CGRect(origin: .zero, size: printSize))
-        drawFill(photo, in: CGRect(origin: .zero, size: printSize), ctx: ctx)
+        ctx.fill(CGRect(origin: .zero, size: size))
+        drawFill(photo, in: CGRect(origin: .zero, size: size), ctx: ctx)
         return try makeImage(from: ctx)
     }
 
-    /// 拼版模式：多布局排版成 1200×1800 大头贴（PhotoBoothProject 经典 collage 形态）。
+    /// 拼版模式：以首张转正照片方向选择 6 寸画布。
     /// 布局网格由 CollageLayout 决定：strip/trio=N 格纵列（行数随张数）、grid2x2=2×2、
     /// duo=1×2、onePlusThree=主图满宽在上 + 三小图横排在下（张数不足自动降列）。
     /// 布局：四周 40px 白边，格间距 24px，底部 160px 品牌条（mascot + 日期 + Photobooth 字样），
@@ -159,7 +163,7 @@ public enum PipelineCore {
                                themeDir: URL,
                                accent: NSColor?,
                                dateText: String) throws -> CGImage {
-        let canvas = printSize
+        let canvas = printSize(for: photos[0])
         let ctx = makeBitmapContext(size: canvas)
         // 白底
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
@@ -251,7 +255,7 @@ public enum PipelineCore {
     }
 
     /// 选片页实时预览：按所选输出合成一张小尺寸预览图（GuestSelectView / iPad 同用）。
-    /// - 单张：所选原图裁切填充 2:3；
+    /// - 单张：所选原图裁切填充对应方向的 2:3 或 3:2 画布；
     /// - 拼版：全部原图按布局网格平铺（不画品牌条/边框，快速出图）；
     /// - filter 非空时套对应风格滤镜，与最终出片一致。
     /// 预期输入为 writePreviews 产出的 ~480px 小图，合成耗时毫秒级。
@@ -261,7 +265,10 @@ public enum PipelineCore {
         guard let first = photos.first else {
             throw BoothError.imagingFailed("预览无输入照片")
         }
-        let previewW = 900, previewH = 1350   // 2:3，大屏/iPad 预览足够清晰
+        let reference = singleIndex.flatMap { photos.indices.contains($0) ? photos[$0] : nil } ?? first
+        let landscape = reference.width > reference.height
+        let previewW = landscape ? 1350 : 900
+        let previewH = landscape ? 900 : 1350
         var canvas: CGImage
 
         if let idx = singleIndex, photos.indices.contains(idx) {

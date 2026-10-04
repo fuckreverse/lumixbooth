@@ -391,7 +391,7 @@ final class DecorationTests: XCTestCase {
         XCTAssertEqual(result.printFile.lastPathComponent, "print.jpg")
         // 6 寸规格不受装饰影响
         let size = imageSize(result.printFile)
-        XCTAssertEqual(size, CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(size, CGSize(width: 1800, height: 1200))
     }
 
     /// 装饰开启但模板不存在 → 降级出片
@@ -404,7 +404,7 @@ final class DecorationTests: XCTestCase {
             decorationsDirOverride: makeTempDir())
         let capture = CameraCapture(handle: 1, data: makeCaptureJPEG(), fileName: "P1.JPG")
         let result = try await service.process(originals: [capture], mode: .single, sessionDir: makeTempDir())
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// landmarker 抛错 → 装饰降级出片
@@ -423,7 +423,7 @@ final class DecorationTests: XCTestCase {
             decorationsDirOverride: decorationsRoot)
         let capture = CameraCapture(handle: 1, data: makeCaptureJPEG(), fileName: "P1.JPG")
         let result = try await service.process(originals: [capture], mode: .single, sessionDir: makeTempDir())
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// 装饰开启但未注入 landmarker → 降级出片
@@ -436,7 +436,7 @@ final class DecorationTests: XCTestCase {
             decorationsDirOverride: makeTempDir())
         let capture = CameraCapture(handle: 1, data: makeCaptureJPEG(), fileName: "P1.JPG")
         let result = try await service.process(originals: [capture], mode: .single, sessionDir: makeTempDir())
-        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1200, height: 1800))
+        XCTAssertEqual(imageSize(result.printFile), CGSize(width: 1800, height: 1200))
     }
 
     /// 配置默认值：decorationTemplate 缺省为空（关闭）

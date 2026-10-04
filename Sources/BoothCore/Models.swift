@@ -220,7 +220,7 @@ public enum PhotoFilter: String, Sendable, Codable, Equatable, CaseIterable {
 /// 修图产物
 public struct ProcessedPhoto: Sendable, Equatable {
     public var id: UUID
-    public var printFile: URL      // 1200×1800 @300dpi 打印位图
+    public var printFile: URL      // 6 寸 @300dpi 打印位图，随照片横竖版调整尺寸
     public var displayFile: URL    // 长边 1600 展示位图（大屏/iPad/QR 下载）
     public var originals: [URL]    // 落盘原图
     /// 未滤镜未边框的排版底图（print-base.jpg；拍后换滤镜重打用，nil = 不支持重打）

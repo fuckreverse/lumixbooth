@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import BoothCore
 
 // ============================================================
@@ -44,7 +45,7 @@ extension PrintBackendError: CustomStringConvertible {
 ///  1. `lpstat -d` / `lpstat -p` 探测打印机可用性（不可用抛 BoothError.printerUnavailable）
 ///  2. `lp -d <打印机名> -n <份数> -o media=<4x6.Borderless|4x6> -o fit-to-page <文件>`
 /// 打印机名为空时省略 -d（用系统默认打印机）。
-/// 图片本体已是 1200×1800 @300dpi 的 6 寸位图，fit-to-page 保证满幅不裁切错位。
+/// 图片本体已是 6 寸 @300dpi 位图，横版时显式指定打印方向。
 struct LPPrintBackend: PrintBackend {
 
     func print(imagePath: String, copies: Int, config: BoothConfig.PrintConf) async throws {
@@ -70,6 +71,13 @@ struct LPPrintBackend: PrintBackend {
 
         // ③ 组装并执行 lp
         var args = lpArguments(imagePath: imagePath, copies: copies, config: config)
+        if let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: imagePath) as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int,
+           let height = properties[kCGImagePropertyPixelHeight] as? Int,
+           width > height {
+            args.insert(contentsOf: ["-o", "orientation-requested=4"], at: args.count - 1)
+        }
         // Epson's macOS driver exposes 4×6 as EPKG rather than CUPS's generic 4x6 alias.
         // Use the advertised PageSize so an unsupported media value cannot fall back to A4.
         if config.paperSize == .six, !config.printerName.isEmpty {

@@ -199,14 +199,14 @@ public struct ImagingService: ImagingServing {
         }
 
         // MARK: ⑤ 排版（单张裁切填充 / 多布局拼版）
-        // 注意：边框叠加在排版之后执行 —— frame.png 是按最终 1200×1800 成片尺寸设计的
+        // 边框在排版之后叠加，按最终画布方向挑选素材。
         let accent = PipelineCore.themeAccent(themeDir: themeDir)
         let layoutStart = CFAbsoluteTimeGetCurrent()
         var canvas: CGImage
         switch mode.kind {
         case .single:
             canvas = try PipelineCore.composeSingle(photos[0])
-            Log.imaging.debug("排版 单张裁切填充 1200x1800 \(elapsedMs(layoutStart))ms")
+            Log.imaging.debug("排版 单张裁切填充 \(canvas.width)x\(canvas.height) \(elapsedMs(layoutStart))ms")
         case .collage:
             if photos.count < mode.shots {
                 Log.imaging.warn("拼版应收\(mode.shots)张实收\(photos.count)张，按实际张数排版")
@@ -387,9 +387,15 @@ public struct ImagingService: ImagingServing {
         // 边框 / 水印
         if conf.frame {
             let stepStart = CFAbsoluteTimeGetCurrent()
-            let frame = PipelineCore.loadCGImage(themeDir.appendingPathComponent("frame.png"))
+            let landscape = image.width > image.height
+            let specificName = landscape ? "frame-landscape.png" : "frame-portrait.png"
+            let specific = PipelineCore.loadCGImage(themeDir.appendingPathComponent(specificName))
+            let generic = PipelineCore.loadCGImage(themeDir.appendingPathComponent("frame.png"))
+            let frame = specific ?? generic.flatMap {
+                ($0.width > $0.height) == landscape ? $0 : nil
+            }
             if frame == nil {
-                Log.imaging.warn("主题[\(conf.themeName)]缺少 frame.png，边框降级跳过（仅水印）")
+                Log.imaging.warn("主题[\(conf.themeName)]缺少匹配画幅的边框，边框降级跳过（仅水印）")
             }
             image = try PipelineCore.overlayFrameAndWatermark(
                 on: image, frame: frame, dateText: dateText, accent: accent,

@@ -75,7 +75,10 @@ actor PreviewPrintBackend: PrintBackend {
         let pdfURL = dir.appendingPathComponent("\(stamp)-\(base).pdf")
 
         // 页尺寸跟随打印尺寸配置（PDF 点 = 1/72 英寸）
-        let pageRect = CGRect(origin: .zero, size: pageSize)
+        let landscape = image.width > image.height
+        let page = landscape ? CGSize(width: max(pageSize.width, pageSize.height),
+                                      height: min(pageSize.width, pageSize.height)) : pageSize
+        let pageRect = CGRect(origin: .zero, size: page)
         guard let ctx = CGContext(pdfURL as CFURL, mediaBox: nil, nil) else {
             throw PrintBackendError.previewFailed("无法创建 PDF: \(pdfURL.path)")
         }
