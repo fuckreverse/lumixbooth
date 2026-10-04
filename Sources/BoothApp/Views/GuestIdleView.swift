@@ -44,14 +44,9 @@ struct GuestIdleView: View {
                     }
                 }
 
-                // 触摸兜底（手势失效也能玩）
-                BoothPrimaryButton("点我开始拍照", emoji: "📸") { vm.triggerStart() }
+                BoothPrimaryButton("点我开始倒计时", emoji: "📸") { vm.triggerStart() }
 
-                // 触发方式快捷切换（免密，持久生效）：手势 ↔ 倒计时
-                BoothStatusPill(emoji: vm.triggerStyle.emoji,
-                               text: vm.triggerStyle.displayName + "（点我切换）",
-                               tint: theme.accentColor)
-                    .onTapGesture { vm.toggleTriggerStyle() }
+                BoothStatusPill(emoji: "⏱️", text: "倒计时拍照", tint: theme.accentColor)
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

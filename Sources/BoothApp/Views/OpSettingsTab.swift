@@ -132,9 +132,8 @@ struct OpSettingsTab: View {
 
                 HStack {
                     label("触发方式")
-                    BoothSegmented(TriggerStyle.allCases.map { .init($0, $0.displayName) },
-                                   selection: bind(\.capture.triggerStyle))
-                        .frame(width: controlWidth)
+                    Text("倒计时拍照（姿势与手势暂时停用）")
+                        .frame(width: controlWidth, alignment: .leading)
                 }
 
                 BoothToggle("拍后选片（连拍后挑一张或拼图样式）",

@@ -86,7 +86,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         // ---- 省电模式（借鉴商业软件“idle 保护”）：待机 N 分钟调暗大屏/暂停轮播 ----
         public var idleDimAfterMin = 10           // 0 = 不启用；>0 待机超过 N 分钟进入省电调暗
         // ---- 拍照前快速设置：触发方式（大屏待机页快捷切换，持久生效）----
-        public var triggerStyle = TriggerStyle.gesture  // 手势拍照 / 倒计时拍照
+        public var triggerStyle = TriggerStyle.countdown  // 暂时只开放手动倒计时
         // ---- 拍后选片（连拍完成后挑一张或挑拼图样式）----
         public var layoutSelection = true         // 连拍后进入选片页（false = 直接按默认布局出片）
         public var selectTimeoutSec = 30          // 选片页超时：按默认布局自动出片
@@ -113,15 +113,16 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             idleSlideshowSec = try c.decodeIfPresent(Int.self, forKey: .idleSlideshowSec) ?? 6
             idleCooldownAfterPrintSec = try c.decodeIfPresent(Int.self, forKey: .idleCooldownAfterPrintSec) ?? 0
             idleDimAfterMin = try c.decodeIfPresent(Int.self, forKey: .idleDimAfterMin) ?? 10
-            triggerStyle = TriggerStyle.parse(try c.decodeIfPresent(String.self, forKey: .triggerStyle))
+            let trigger = try c.decodeIfPresent(String.self, forKey: .triggerStyle)
+            triggerStyle = trigger.flatMap(TriggerStyle.init(rawValue:)) ?? .countdown
             layoutSelection = try c.decodeIfPresent(Bool.self, forKey: .layoutSelection) ?? true
             selectTimeoutSec = try c.decodeIfPresent(Int.self, forKey: .selectTimeoutSec) ?? 30
         }
     }
 
     public struct VisionConf: Codable, Sendable, Equatable {
-        public var gestureEnabled = true
-        public var poseReadinessEnabled = true
+        public var gestureEnabled = false
+        public var poseReadinessEnabled = false
         // 防抖为时长语义（毫秒）：连续稳定 X ms 才算命中，对 LiveView 帧率波动免疫。
         // 旧配置的帧数字段（readyFrames/gestureHitFrames）已废弃，解码时忽略。
         public var readyStableMs = 1200          // 姿势就绪需连续稳定时长
@@ -139,8 +140,8 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            gestureEnabled = try c.decodeIfPresent(Bool.self, forKey: .gestureEnabled) ?? true
-            poseReadinessEnabled = try c.decodeIfPresent(Bool.self, forKey: .poseReadinessEnabled) ?? true
+            gestureEnabled = try c.decodeIfPresent(Bool.self, forKey: .gestureEnabled) ?? false
+            poseReadinessEnabled = try c.decodeIfPresent(Bool.self, forKey: .poseReadinessEnabled) ?? false
             readyStableMs = try c.decodeIfPresent(Int.self, forKey: .readyStableMs) ?? 1200
             gestureStableMs = try c.decodeIfPresent(Int.self, forKey: .gestureStableMs) ?? 350
             absentStableMs = try c.decodeIfPresent(Int.self, forKey: .absentStableMs) ?? 1000

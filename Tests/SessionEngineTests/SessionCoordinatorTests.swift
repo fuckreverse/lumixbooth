@@ -37,7 +37,13 @@ final class SessionCoordinatorTests: XCTestCase {
         // 先快照真实配置（shared.update 会写真实 config.json），tearDown 还原
         savedConfig = await ConfigStore.shared.config
         // 重置共享配置到默认值，各测试再覆写关键字段
-        await ConfigStore.shared.update { c in c = BoothConfig() }
+        await ConfigStore.shared.update { c in
+            c = BoothConfig()
+            // Legacy automatic-trigger tests explicitly exercise the dormant pose/gesture path.
+            c.capture.triggerStyle = .gesture
+            c.vision.gestureEnabled = true
+            c.vision.poseReadinessEnabled = true
+        }
         camera = MockCamera()
         gesture = MockGesture()
         readiness = MockReadiness()
@@ -811,6 +817,31 @@ final class SessionCoordinatorTests: XCTestCase {
     }
 
     // MARK: - 触发方式（手势/倒计时）
+
+    func testManualCountdownWithPoseAndGestureDisabled() async {
+        await configure { c in
+            c.capture.countdownSec = 1
+            c.capture.defaultMode = .single
+            c.capture.layoutSelection = false
+            c.capture.triggerStyle = .countdown
+            c.vision.poseReadinessEnabled = false
+            c.vision.gestureEnabled = false
+            c.vision.detectEveryNFrames = 1
+        }
+        let coord = makeSUT()
+        await coord.begin()
+        readiness.readiness = MockReadiness.ready()
+        for _ in 0..<8 { camera.pushFrame() }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let stateBeforeStart = await coord.state
+        XCTAssertEqual(stateBeforeStart, .idle, "禁用姿势后不应自动进入等待界面")
+        await coord.start()
+        await expect("手动开始应走倒计时进入 review") { isReview(await coord.state) }
+        await settle()
+        XCTAssertTrue(recorder.states.contains(.countdown(secondsLeft: 1)))
+        XCTAssertFalse(recorder.states.contains(.armed))
+        XCTAssertFalse(recorder.states.contains(.gestureWait))
+    }
 
     /// 倒计时拍照模式：姿势就绪直接开拍，不经过 gestureWait
     func testCountdownTriggerStyleSkipsGestureWait() async {

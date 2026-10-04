@@ -58,7 +58,7 @@ final class GuestViewModel: ObservableObject {
     /// 当前选中的拼图样式（SELECT 态；初始为模式布局）
     @Published private(set) var currentLayout: CollageLayout = .strip
     /// 触发方式（大屏快捷胶囊切换，持久生效）
-    @Published private(set) var triggerStyle = TriggerStyle.gesture
+    @Published private(set) var triggerStyle = TriggerStyle.countdown
     /// IDLE 背景历史成片轮播开关
     @Published private(set) var idleSlideshow = true
 
@@ -221,12 +221,4 @@ final class GuestViewModel: ObservableObject {
         Log.ui.info("选片确认: kind=\(kind.rawValue) layout=\(currentLayout.rawValue) filter=\(filter.rawValue) indexes=\(indexes)")
     }
 
-    // MARK: - 触发方式快速切换（持久生效，免密）
-
-    func toggleTriggerStyle() {
-        let next: TriggerStyle = triggerStyle == .gesture ? .countdown : .gesture
-        triggerStyle = next   // 先本地切换，落盘以下次刷新为准
-        Task { await ConfigStore.shared.update { $0.capture.triggerStyle = next } }
-        Log.ui.info("触发方式切换为：\(next.displayName)")
-    }
 }
