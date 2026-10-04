@@ -622,24 +622,23 @@ final class SessionCoordinatorTests: XCTestCase {
 
     // MARK: - QR 叠印打印流
 
-    /// printQRCode=true（默认）：打印前把 /photo/{id} 下载链接叠印到成片
-    func testPrintQRCodeStampsOverlay() async {
+    /// 旧配置即使启用了二维码，下载功能未就绪期间打印也不得叠印。
+    func testPrintQRCodeDisabledEvenForLegacyEnabledConfig() async {
         await configure { c in
             c.capture.countdownSec = 0
             c.capture.defaultMode = .single
             c.capture.reviewTimeoutSec = 60
             c.printing.printingDwellSec = 0
+            c.printing.printQRCode = true
         }
         let coord = makeSUT()
         await driveToReview(coord)
         await coord.confirmPrint(copies: 1)
         await expect("打印后应回 idle") { await coord.state == .idle }
 
-        XCTAssertEqual(imaging.qrCalls.count, 1, "应叠印一次 QR")
-        let content = imaging.qrCalls.first ?? ""
-        XCTAssertTrue(content.contains("/photo/"), "QR 内容应为成片下载链接: \(content)")
+        XCTAssertTrue(imaging.qrCalls.isEmpty, "暂不可用时不应叠印 QR")
         XCTAssertEqual((printer.submitted.first?.imagePath as NSString?).map { $0.lastPathComponent },
-                       "print-qr.png", "打印应使用叠印后的成片")
+                       "print.png", "打印应使用原图")
 
         // 关闭开关：第二轮不应再叠印
         await configure { c in c.printing.printQRCode = false }
@@ -647,7 +646,7 @@ final class SessionCoordinatorTests: XCTestCase {
         await expect("第二轮应进入 review") { isReview(await coord.state) }
         await coord.confirmPrint(copies: 1)
         await expect("第二轮打印后应回 idle") { await coord.state == .idle }
-        XCTAssertEqual(imaging.qrCalls.count, 1, "关闭开关后不应叠印")
+        XCTAssertTrue(imaging.qrCalls.isEmpty, "关闭开关后也不应叠印")
         XCTAssertEqual((printer.submitted.last?.imagePath as NSString?).map { $0.lastPathComponent },
                        "print.png", "关闭开关时应打印原图")
     }

@@ -203,7 +203,8 @@ public struct BoothConfig: Codable, Sendable, Equatable {
         public var dedupeWindowSec = 5            // 同一成片防连点窗口
         public var printQuotaPerHour = 0          // 每小时打印张数上限，0 = 不限制（防脚本刷打印）
         // ---- 新增（借鉴 PhotoBoothProject 打印设置粒度）----
-        public var printQRCode = true             // 成片右缘印 QR 码（扫码下载电子版）
+        public static let photoQRCodeAvailable = false // 下载功能未就绪，暂不在成片上印码
+        public var printQRCode = false            // 保留配置字段，便于功能恢复后兼容旧配置
         public var autoPrintDelaySec = 0          // REVIEW 超时自动打印前的延迟（给宾客最后反应时间）
         public var printingDwellSec = 3           // “打印中请稍候”提示停留时长（原硬编码 3s）
         public var printKeyEnabled = true         // 键盘 P 在 REVIEW 态触发打印（兜底）
@@ -232,7 +233,7 @@ public struct BoothConfig: Codable, Sendable, Equatable {
             borderless = try c.decodeIfPresent(Bool.self, forKey: .borderless) ?? true
             dedupeWindowSec = try c.decodeIfPresent(Int.self, forKey: .dedupeWindowSec) ?? 5
             printQuotaPerHour = try c.decodeIfPresent(Int.self, forKey: .printQuotaPerHour) ?? 0
-            printQRCode = try c.decodeIfPresent(Bool.self, forKey: .printQRCode) ?? true
+            printQRCode = try c.decodeIfPresent(Bool.self, forKey: .printQRCode) ?? false
             autoPrintDelaySec = try c.decodeIfPresent(Int.self, forKey: .autoPrintDelaySec) ?? 0
             printingDwellSec = try c.decodeIfPresent(Int.self, forKey: .printingDwellSec) ?? 3
             printKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .printKeyEnabled) ?? true

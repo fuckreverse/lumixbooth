@@ -562,9 +562,10 @@ public actor SessionCoordinator {
         let cfg = await config.config
         let clamped = min(max(copies, cfg.printing.minCopies), cfg.printing.maxCopies)
         await transition(.printing(copies: clamped), reason: reason)
-        // 打印 QR 叠印（PhotoBoothProject 借鉴）：把电子版下载链接印到成片右缘
+        // 下载功能未就绪期间禁止叠印，即使旧配置仍将 printQRCode 设为 true。
         // 有 Boomerang GIF 时优先指向动态图（扫码即看会动的照片）
-        if cfg.printing.printQRCode, let server, server.port > 0 {
+        if BoothConfig.PrintConf.photoQRCodeAvailable,
+           cfg.printing.printQRCode, let server, server.port > 0 {
             let host = LANAddress.localIPv4() ?? "127.0.0.1"
             let gifSuffix = photo.gifFile != nil ? ".gif" : ""
             let content = "http://\(host):\(server.port)/photo/\(photo.id.uuidString)\(gifSuffix)"

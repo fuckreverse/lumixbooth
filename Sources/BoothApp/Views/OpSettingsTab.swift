@@ -220,8 +220,9 @@ struct OpSettingsTab: View {
                 Text("防脚本刷打印；超限任务标记失败")
                     .font(theme.bodyFont(13))
                     .foregroundStyle(theme.textSecondaryColor)
-                BoothToggle("成片边缘印二维码（扫码存电子版）",
-                            isOn: bind(\.printing.printQRCode))
+                Text("成片二维码下载暂不可用，打印照片不会叠印二维码")
+                    .font(theme.bodyFont(13))
+                    .foregroundStyle(theme.textSecondaryColor)
                 BoothToggle("大屏显示打印按钮（关则仅 iPad / P 键可打印）",
                             isOn: bind(\.printing.showPrintButton))
                 BoothToggle("P 键触发打印（操作员兜底通道）",

@@ -112,7 +112,7 @@ final class BoothCoreTests: XCTestCase {
         XCTAssertEqual(cfg.imaging.filterSelection, true)
         XCTAssertEqual(cfg.imaging.defaultFilter, .none)
         // 打印段新字段默认值
-        XCTAssertEqual(cfg.printing.printQRCode, true)
+        XCTAssertEqual(cfg.printing.printQRCode, false)
         XCTAssertEqual(cfg.printing.autoPrintDelaySec, 0)
         XCTAssertEqual(cfg.printing.printingDwellSec, 3)
         XCTAssertEqual(cfg.printing.printKeyEnabled, true)
