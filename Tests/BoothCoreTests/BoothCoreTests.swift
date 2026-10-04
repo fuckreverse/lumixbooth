@@ -2,6 +2,13 @@ import XCTest
 @testable import BoothCore
 
 final class BoothCoreTests: XCTestCase {
+    func testLocalizedPrinterStatus() {
+        XCTAssertEqual(HealthMonitor.parsePrinterStatus("打印机EPSON_L8050_Series_2闲置，启用时间始于今天").state, "idle")
+        XCTAssertEqual(HealthMonitor.parsePrinterStatus("打印机EPSON_L8050_Series_2正在打印任务").state, "printing")
+        XCTAssertEqual(HealthMonitor.parsePrinterStatus("打印机EPSON_L8050_Series_2停用时间始于今天").state, "disabled")
+        XCTAssertEqual(HealthMonitor.parsePrinterStatus("printer EPSON_L8050_Series_2 is idle. enabled since today").state, "idle")
+    }
+
     func testShootMode() {
         XCTAssertEqual(ShootMode.single.shots, 1)
         XCTAssertEqual(ShootMode.collage().shots, 4)

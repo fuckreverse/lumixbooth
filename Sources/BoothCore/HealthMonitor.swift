@@ -118,20 +118,30 @@ public actor HealthMonitor {
 
     // MARK: - 探测实现
 
-    /// CUPS 打印机探测：/usr/bin/lpstat -p（超时 3s；解析首台打印机状态）
+    /// CUPS 打印机探测：优先查询打印配置选中的队列（超时 3s）。
     ///   "printer Foo is idle.  enabled since ..."  → idle
     ///   "printer Foo now printing Foo-123."        → printing
     ///   "printer Foo disabled since ..."          → disabled
     ///   无输出                                       → unknown
     public static func lpstatProbe() async -> (state: String, detail: String?) {
-        let out = await runCommand("/usr/bin/lpstat", arguments: ["-p"], timeout: 3)
+        let printerName = await ConfigStore.shared.config.printing.printerName
+        let args = printerName.isEmpty ? ["-p"] : ["-p", printerName]
+        let out = await runCommand("/usr/bin/lpstat", arguments: args, timeout: 3)
         guard let out, !out.isEmpty else { return ("unknown", nil) }
         let first = out.split(separator: "\n", maxSplits: 1)[0]
+        return parsePrinterStatus(String(first))
+    }
+
+    public static func parsePrinterStatus(_ line: String) -> (state: String, detail: String?) {
+        let first = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !first.isEmpty else { return ("unknown", nil) }
         let lower = first.lowercased()
-        if lower.contains("now printing") { return ("printing", String(first)) }
-        if lower.contains("is idle") { return ("idle", String(first)) }
-        if lower.contains("disabled") || lower.contains("not ready") { return ("disabled", String(first)) }
-        return ("error", String(first))
+        if lower.contains("disabled") || lower.contains("not ready") || first.contains("停用") {
+            return ("disabled", first)
+        }
+        if lower.contains("now printing") || first.contains("正在打印") { return ("printing", first) }
+        if lower.contains("is idle") || first.contains("闲置") { return ("idle", first) }
+        return ("error", first)
     }
 
     /// 应用支持卷剩余空间（MB）；-1 = 查询失败
